@@ -1,0 +1,1343 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>供应链 GraphRAG 问答演示</title>
+    <style>
+        :root {
+            --bg: #f6f2ea;
+            --bg-accent: #f0e6d6;
+            --ink: #1f1d1a;
+            --muted: #6c655a;
+            --panel: #ffffff;
+            --brand: #c3522f;
+            --brand-2: #2e6b5f;
+            --user: #2e6b5f;
+            --assistant: #f2efe9;
+            --shadow: rgba(0, 0, 0, 0.08);
+            --border: #e4d8c6;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+
+        body {
+            color: var(--ink);
+            background:
+                radial-gradient(1200px 600px at 10% -10%, #fff3da 0%, transparent 60%),
+                radial-gradient(900px 500px at 110% 10%, #efe7ff 0%, transparent 55%),
+                linear-gradient(180deg, var(--bg) 0%, var(--bg-accent) 100%);
+            font-family: "Source Han Serif SC", "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+            padding: 12px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .frame {
+            width: min(1500px, 100%);
+            height: calc(100vh - 24px);
+            background: var(--panel);
+            border-radius: 18px;
+            box-shadow: 0 20px 60px var(--shadow);
+            border: 1px solid var(--border);
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            overflow: hidden;
+        }
+
+        .side {
+            padding: 22px;
+            background: linear-gradient(160deg, #fff7ea 0%, #fff 40%);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            overflow-y: auto;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            color: var(--brand);
+            letter-spacing: 0.4px;
+        }
+
+        .side h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            line-height: 1.35;
+        }
+
+        .side p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.55;
+            font-size: 0.92rem;
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .chip {
+            border: 1px solid var(--border);
+            background: #fffaf2;
+            padding: 7px 10px;
+            border-radius: 999px;
+            font-size: 0.82rem;
+            color: var(--muted);
+            cursor: pointer;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .chip:hover {
+            transform: translateY(-2px);
+            border-color: var(--brand);
+            color: var(--ink);
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: auto;
+        }
+
+        .btn {
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: #fff;
+            cursor: pointer;
+            font-size: 0.86rem;
+        }
+
+        .btn-primary {
+            background: var(--brand);
+            color: #fff;
+            border-color: var(--brand);
+        }
+
+        .main {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            height: 100%;
+        }
+
+        .header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-title {
+            font-weight: 700;
+        }
+
+        .status {
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+
+        .workspace {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            height: 100%;
+        }
+
+        .qa-panel {
+            height: 100%;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+        }
+
+        .trace {
+            padding: 10px 12px 12px;
+            background: linear-gradient(180deg, #fffdf9, #fff6eb);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+        }
+
+        .trace-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .trace-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+        }
+
+        .trace-meta {
+            font-size: 0.8rem;
+            color: var(--muted);
+        }
+
+        .trace-toggle {
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--muted);
+            font-size: 0.8rem;
+            border-radius: 8px;
+            padding: 4px 8px;
+            cursor: pointer;
+        }
+
+        .trace-body {
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .trace-block {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #fff;
+            padding: 10px 10px 8px;
+            min-height: 140px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .trace-block h4 {
+            margin: 0 0 6px;
+            font-size: 0.8rem;
+            color: var(--brand);
+        }
+
+        .trace-list {
+            margin: 0;
+            padding-left: 16px;
+            color: var(--ink);
+            font-size: 0.8rem;
+            line-height: 1.45;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .chat-shell {
+            width: 100%;
+            min-width: 0;
+            min-height: 0;
+            height: 100%;
+            flex: 1;
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            overflow: hidden;
+        }
+
+        .chat {
+            height: 100%;
+            min-height: 0;
+            padding: 18px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            scrollbar-width: thin;
+            scrollbar-color: #d1c3b2 #f3ece2;
+        }
+
+        .chat::-webkit-scrollbar { width: 10px; }
+        .chat::-webkit-scrollbar-track { background: #f3ece2; }
+        .chat::-webkit-scrollbar-thumb { background: #d1c3b2; border-radius: 999px; }
+
+        .msg {
+            max-width: 86%;
+            padding: 12px 14px;
+            border-radius: 14px;
+            line-height: 1.6;
+            word-break: break-word;
+            border: 1px solid transparent;
+            white-space: pre-wrap;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            background: var(--user);
+            color: #fff;
+        }
+
+        .msg.assistant {
+            align-self: flex-start;
+            background: var(--assistant);
+            border-color: var(--border);
+        }
+
+        .typing {
+            color: var(--muted);
+            font-size: 0.88rem;
+            font-style: italic;
+            display: none;
+        }
+
+        .footer {
+            border-top: 1px solid var(--border);
+            padding: 14px 18px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            width: 100%;
+            min-width: 0;
+            justify-self: stretch;
+            align-self: stretch;
+            box-sizing: border-box;
+        }
+
+        #input {
+            flex: 1;
+            width: 100%;
+            min-width: 0;
+            padding: 11px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            font-size: 1rem;
+            outline: none;
+        }
+
+        #input:focus { border-color: var(--brand-2); }
+
+        #send {
+            flex: 0 0 auto;
+            padding: 11px 14px;
+            border-radius: 10px;
+            border: none;
+            background: var(--brand-2);
+            color: #fff;
+            cursor: pointer;
+            font-size: 0.92rem;
+        }
+
+        #send:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .graph-panel {
+            height: 100%;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, #fff, #fffdf9);
+        }
+
+        .viz-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .viz-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .viz-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .viz-btn {
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--muted);
+            border-radius: 8px;
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .viz-btn.active {
+            color: #fff;
+            background: var(--brand-2);
+            border-color: var(--brand-2);
+        }
+
+        .viz-meta {
+            font-size: 0.8rem;
+            color: var(--muted);
+            padding: 8px 14px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .viz-summary {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, #fffaf4 0%, #fff 100%);
+        }
+
+        .viz-card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.92);
+            padding: 10px 12px;
+            box-shadow: 0 8px 24px rgba(110, 86, 53, 0.05);
+        }
+
+        .viz-card-label {
+            font-size: 0.74rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .viz-card-value {
+            margin-top: 6px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .graph-legend {
+            padding: 8px 14px;
+            font-size: 0.78rem;
+            color: #5f574d;
+            border-bottom: 1px solid var(--border);
+            background: #fffaf2;
+            line-height: 1.5;
+        }
+
+        .legend-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .legend-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 5px 10px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #544b40;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex: 0 0 10px;
+        }
+
+        .graph-canvas {
+            flex: 1;
+            min-height: 0;
+            background: radial-gradient(900px 400px at 10% 0%, #fff9ef 0%, transparent 55%), #fff;
+        }
+
+        .node-info {
+            border-top: 1px solid var(--border);
+            padding: 12px 14px 14px;
+            min-height: 150px;
+            max-height: 220px;
+            overflow-y: auto;
+            background: #fffefb;
+        }
+
+        .node-info-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .node-info-title {
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .node-info-subtitle {
+            margin-top: 4px;
+            font-size: 0.78rem;
+            color: var(--muted);
+        }
+
+        .node-info-badge {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: #fff;
+            white-space: nowrap;
+        }
+
+        .node-info-empty {
+            color: var(--muted);
+            font-size: 0.84rem;
+            line-height: 1.6;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px 12px;
+        }
+
+        .detail-row {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px 10px;
+            background: #fff;
+        }
+
+        .detail-key {
+            font-size: 0.74rem;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        .detail-value {
+            font-size: 0.82rem;
+            color: var(--ink);
+            line-height: 1.45;
+            word-break: break-word;
+        }
+
+        @media (max-width: 1200px) {
+            .workspace { grid-template-columns: 1fr 1fr; }
+            .viz-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 980px) {
+            body {
+                padding: 0;
+                display: block;
+            }
+            .frame {
+                height: 100vh;
+                border-radius: 0;
+                border-left: none;
+                border-right: none;
+            }
+            .side { display: none; }
+            .workspace {
+                grid-template-columns: 1fr;
+                grid-template-rows: 56% 44%;
+            }
+            .qa-panel {
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+            }
+            .trace { display: none !important; }
+            .viz-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .detail-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+<div class="frame">
+    <aside class="side">
+        <div class="badge">SupplyChain GraphRAG</div>
+        <h1>供应链问答演示台</h1>
+        <p>左侧提问，右侧图谱同步展示。默认显示关键子图，可一键切换全量图谱用于演示。</p>
+        <div class="chips" id="chips">
+            <div class="chip">供应商断供会影响哪些订单？</div>
+            <div class="chip">ORD-2024-100001 延误根因是什么？</div>
+            <div class="chip">finance 视角下最关键瓶颈是谁？</div>
+            <div class="chip">延误超过 3 天的损失估算</div>
+            <div class="chip">利润贡献最高的产品有哪些？</div>
+        </div>
+        <div class="trace" id="tracePanel" style="display:none;">
+            <div class="trace-head">
+                <div>
+                    <div class="trace-title">Reasoning Progress</div>
+                    <div class="trace-meta" id="traceMeta">request_id: -</div>
+                </div>
+                <button class="trace-toggle" id="traceToggle">Collapse</button>
+            </div>
+            <div class="trace-body" id="traceBody">
+                <div class="trace-block">
+                    <h4>Stage Logs</h4>
+                    <ol class="trace-list" id="progressList"></ol>
+                </div>
+                <div class="trace-block">
+                    <h4>Hop Tools</h4>
+                    <ol class="trace-list" id="hopList"></ol>
+                </div>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="btn" id="reset">清空对话</button>
+            <button class="btn btn-primary" id="newSession">新会话</button>
+        </div>
+    </aside>
+
+    <section class="main">
+        <div class="header">
+            <div class="header-title">问答对话</div>
+            <div class="status" id="status">会话已建立</div>
+        </div>
+
+        <div class="workspace">
+            <div class="qa-panel">
+                <div class="chat-shell">
+                    <div class="chat" id="chat">
+                        <div class="msg assistant">你好，我是供应链图谱助手。你可以提问异常追溯、断供影响、风险评估、关键瓶颈等问题。</div>
+                        <div class="typing" id="typing">正在分析供应链关系与指标...</div>
+                    </div>
+
+                    <div class="footer">
+                        <input id="input" type="text" placeholder="输入你的问题，例如：某供应商断供会造成哪些影响？" />
+                        <button id="send">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="graph-panel">
+                <div class="viz-head">
+                    <div class="viz-title">Graph View</div>
+                    <div class="viz-actions">
+                        <button class="viz-btn active" id="focusGraphBtn">Focus Graph</button>
+                        <button class="viz-btn" id="fullGraphBtn">Full Graph</button>
+                    </div>
+                </div>
+                <div class="viz-meta" id="vizMeta">Graph not loaded.</div>
+                <div class="viz-summary">
+                    <div class="viz-card">
+                        <div class="viz-card-label">节点数</div>
+                        <div class="viz-card-value" id="metricNodes">-</div>
+                    </div>
+                    <div class="viz-card">
+                        <div class="viz-card-label">关系数</div>
+                        <div class="viz-card-value" id="metricEdges">-</div>
+                    </div>
+                    <div class="viz-card">
+                        <div class="viz-card-label">当前模式</div>
+                        <div class="viz-card-value" id="metricMode">未加载</div>
+                    </div>
+                    <div class="viz-card">
+                        <div class="viz-card-label">展示说明</div>
+                        <div class="viz-card-value" id="metricHint">等待问题</div>
+                    </div>
+                </div>
+                <div class="graph-legend" id="graphLegend">
+                    节点颜色代表实体类型，节点越大说明连接越多。单击节点看实体详情，单击边查看关系方向。
+                    <div class="legend-pills" id="legendPills"></div>
+                </div>
+                <div class="graph-canvas" id="graphCanvas"></div>
+                <div class="node-info" id="nodeInfo">
+                    <div class="node-info-head">
+                        <div>
+                            <div class="node-info-title" id="nodeInfoTitle">详情面板</div>
+                            <div class="node-info-subtitle" id="nodeInfoSubtitle">点击节点或关系后，这里会显示结构化信息。</div>
+                        </div>
+                        <div class="node-info-badge" id="nodeInfoBadge" style="background:#8a7e70;">等待选择</div>
+                    </div>
+                    <div id="nodeInfoBody" class="node-info-empty">建议在演示时先点击较大的节点，它们通常是当前问题下更关键的实体。</div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<script>
+    const API_STREAM_URL = "http://127.0.0.1:8000/api/chat/stream";
+    const GRAPH_URL = "http://127.0.0.1:8000/api/graph_view";
+
+    const chat = document.getElementById("chat");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+    const typing = document.getElementById("typing");
+    const status = document.getElementById("status");
+    const chips = document.getElementById("chips");
+    const resetBtn = document.getElementById("reset");
+    const newSessionBtn = document.getElementById("newSession");
+
+    const tracePanel = document.getElementById("tracePanel");
+    const traceMeta = document.getElementById("traceMeta");
+    const traceBody = document.getElementById("traceBody");
+    const traceToggle = document.getElementById("traceToggle");
+    const progressList = document.getElementById("progressList");
+    const hopList = document.getElementById("hopList");
+
+    const focusGraphBtn = document.getElementById("focusGraphBtn");
+    const fullGraphBtn = document.getElementById("fullGraphBtn");
+    const vizMeta = document.getElementById("vizMeta");
+    const graphCanvas = document.getElementById("graphCanvas");
+    const legendPills = document.getElementById("legendPills");
+    const metricNodes = document.getElementById("metricNodes");
+    const metricEdges = document.getElementById("metricEdges");
+    const metricMode = document.getElementById("metricMode");
+    const metricHint = document.getElementById("metricHint");
+    const nodeInfoTitle = document.getElementById("nodeInfoTitle");
+    const nodeInfoSubtitle = document.getElementById("nodeInfoSubtitle");
+    const nodeInfoBadge = document.getElementById("nodeInfoBadge");
+    const nodeInfoBody = document.getElementById("nodeInfoBody");
+
+    const sessionKey = "scg_conversation_id";
+    let conversationId = localStorage.getItem(sessionKey);
+    let lastQuestion = "";
+    let graphMode = "focus";
+    let graphChart = null;
+
+    if (!conversationId) {
+        conversationId = `conv_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        localStorage.setItem(sessionKey, conversationId);
+    }
+
+    function setStatus(text) {
+        status.textContent = text;
+    }
+
+    function appendMessage(text, role) {
+        const div = document.createElement("div");
+        div.className = `msg ${role}`;
+        div.textContent = role === "assistant" ? formatAssistantText(text) : text;
+        chat.insertBefore(div, typing);
+        chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
+        return div;
+    }
+
+    function updateAssistantMessage(node, text) {
+        if (!node) return;
+        node.textContent = formatAssistantText(text);
+        chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
+    }
+
+    function formatAssistantText(text) {
+        let t = String(text || "").replace(/\r\n/g, "\n");
+        t = t.replace(/\s*(第[一二三四五六七八九十]+，)/g, "\n$1");
+        t = t.replace(/([。；])\s*(\d+\.)/g, "$1\n$2");
+        t = t.replace(/([。；])\s*([一二三四五六七八九十]+、)/g, "$1\n$2");
+        t = t.replace(/\s*([*•]\s+)/g, "\n$1");
+        t = t.replace(
+            /(分别是：|包括：)([^\n。；]+)/g,
+            (m, prefix, items) => {
+                const parts = String(items)
+                    .split("、")
+                    .map((x) => x.trim().replace(/[，,]$/, ""))
+                    .filter(Boolean);
+                if (parts.length <= 1) return m;
+                const lines = parts.map((p, idx) => `${idx + 1}. ${p}`).join("\n");
+                return `${prefix}\n${lines}`;
+            }
+        );
+        t = t.replace(/。(?=第[一二三四五六七八九十]+，)/g, "。\n");
+        t = t.replace(/\n{3,}/g, "\n\n");
+        return t.trim();
+    }
+
+    function clearTracePanel() {
+        traceMeta.textContent = "request_id: -";
+        progressList.innerHTML = "";
+        hopList.innerHTML = "";
+        tracePanel.style.display = "none";
+        traceBody.style.display = "grid";
+        traceToggle.textContent = "Collapse";
+    }
+
+    function renderTrace(trace) {
+        if (!trace || typeof trace !== "object") {
+            clearTracePanel();
+            return;
+        }
+
+        const requestId = trace.request_id || "-";
+        const progress = Array.isArray(trace.progress_log) ? trace.progress_log : [];
+        const hops = Array.isArray(trace.hops) ? trace.hops : [];
+
+        traceMeta.textContent = `request_id: ${requestId}`;
+        progressList.innerHTML = "";
+        hopList.innerHTML = "";
+
+        progress.forEach((line) => {
+            const li = document.createElement("li");
+            li.textContent = String(line);
+            progressList.appendChild(li);
+        });
+
+        hops.forEach((hop, idx) => {
+            const tool = hop?.tool_trace?.tool || "unknown";
+            const subq = hop?.sub_question || "";
+            const li = document.createElement("li");
+            li.textContent = `Hop ${idx + 1}: ${tool}${subq ? " | " + subq : ""}`;
+            hopList.appendChild(li);
+        });
+
+        if (!progress.length) {
+            const li = document.createElement("li");
+            li.textContent = "No stage logs";
+            progressList.appendChild(li);
+        }
+
+        if (!hops.length) {
+            const li = document.createElement("li");
+            li.textContent = "No hop-tool details";
+            hopList.appendChild(li);
+        }
+
+        tracePanel.style.display = "block";
+    }
+
+    function setGraphButtons(mode) {
+        graphMode = mode;
+        if (mode === "focus") {
+            focusGraphBtn.classList.add("active");
+            fullGraphBtn.classList.remove("active");
+        } else {
+            fullGraphBtn.classList.add("active");
+            focusGraphBtn.classList.remove("active");
+        }
+    }
+
+    function nodeLabel(node) {
+        const p = node?.props || {};
+        return p.name || p.id || p.code || p.sku || `${(node.labels || ["Node"])[0]}#${node.id}`;
+    }
+
+    function labelColor(label) {
+        const palette = {
+            Supplier: "#c3522f",
+            Product: "#2e6b5f",
+            Order: "#345f9f",
+            Component: "#7c5aa6",
+            Customer: "#6e8f2f",
+            Carrier: "#8b5e3c",
+            Category: "#b25f8d",
+            Department: "#6b7a89",
+            Node: "#888888",
+        };
+        return palette[label] || "#666666";
+    }
+
+    function setGraphMetrics(meta, nodes, edges, label) {
+        const nodeCount = meta.node_count || nodes.length || 0;
+        const edgeCount = meta.edge_count || edges.length || 0;
+        const mode = (meta.mode || "").toLowerCase() === "full" ? "全量图谱" : "问题聚焦";
+        const keywords = Array.isArray(meta.keywords) ? meta.keywords.filter(Boolean) : [];
+        const hint = meta.truncated
+            ? "当前为截断展示，适合大屏演示"
+            : keywords.length
+                ? `围绕 ${keywords.slice(0, 3).join(" / ")} 展开`
+                : (label || "图谱已加载");
+
+        metricNodes.textContent = String(nodeCount);
+        metricEdges.textContent = String(edgeCount);
+        metricMode.textContent = mode;
+        metricHint.textContent = hint;
+    }
+
+    function renderLegend(categories) {
+        legendPills.innerHTML = "";
+        categories.forEach((name) => {
+            const item = document.createElement("div");
+            item.className = "legend-pill";
+            const dot = document.createElement("span");
+            dot.className = "legend-dot";
+            dot.style.background = labelColor(name);
+            const text = document.createElement("span");
+            text.textContent = name;
+            item.appendChild(dot);
+            item.appendChild(text);
+            legendPills.appendChild(item);
+        });
+    }
+
+    function renderDetailRows(rows) {
+        if (!rows.length) {
+            nodeInfoBody.className = "node-info-empty";
+            nodeInfoBody.textContent = "没有可展示的详细属性。";
+            return;
+        }
+
+        nodeInfoBody.className = "detail-grid";
+        nodeInfoBody.innerHTML = "";
+        rows.forEach((row) => {
+            const wrapper = document.createElement("div");
+            wrapper.className = "detail-row";
+
+            const key = document.createElement("div");
+            key.className = "detail-key";
+            key.textContent = row.key;
+
+            const value = document.createElement("div");
+            value.className = "detail-value";
+            value.textContent = row.value;
+
+            wrapper.appendChild(key);
+            wrapper.appendChild(value);
+            nodeInfoBody.appendChild(wrapper);
+        });
+    }
+
+    function renderNodeInfo(data) {
+        if (!data) {
+            nodeInfoTitle.textContent = "详情面板";
+            nodeInfoSubtitle.textContent = "点击节点或关系后，这里会显示结构化信息。";
+            nodeInfoBadge.textContent = "等待选择";
+            nodeInfoBadge.style.background = "#8a7e70";
+            nodeInfoBody.className = "node-info-empty";
+            nodeInfoBody.textContent = "建议在演示时先点击较大的节点，它们通常是当前问题下更关键的实体。";
+            return;
+        }
+
+        nodeInfoTitle.textContent = data.displayName || "未命名节点";
+        nodeInfoSubtitle.textContent = `节点 ID: ${data.rawId || "-"} | 类型: ${data.label || "Node"}`;
+        nodeInfoBadge.textContent = data.label || "Node";
+        nodeInfoBadge.style.background = labelColor(data.label || "Node");
+
+        const rows = [
+            { key: "显示名称", value: data.displayName || "-" },
+            { key: "图谱 ID", value: data.rawId || "-" },
+        ];
+        const props = data.props || {};
+        Object.keys(props).slice(0, 10).forEach((k) => {
+            rows.push({ key: k, value: String(props[k]) });
+        });
+        renderDetailRows(rows);
+    }
+
+    function renderEdgeInfo(data) {
+        if (!data) {
+            renderNodeInfo(null);
+            return;
+        }
+
+        nodeInfoTitle.textContent = data.label || "关系";
+        nodeInfoSubtitle.textContent = "关系详情";
+        nodeInfoBadge.textContent = "Relationship";
+        nodeInfoBadge.style.background = "#6b7a89";
+        renderDetailRows([
+            { key: "关系类型", value: data.label || "REL" },
+            { key: "方向", value: `${data.sourceName || data.source} -> ${data.targetName || data.target}` },
+        ]);
+    }
+
+    function clearGraph() {
+        if (graphChart) {
+            graphChart.clear();
+        }
+        metricNodes.textContent = "-";
+        metricEdges.textContent = "-";
+        metricMode.textContent = "未加载";
+        metricHint.textContent = "等待问题";
+        legendPills.innerHTML = "";
+        renderNodeInfo(null);
+    }
+
+    function renderGraph(graphData, label) {
+        if (typeof echarts === "undefined") {
+            vizMeta.textContent = "ECharts not loaded. Cannot render graph.";
+            return;
+        }
+
+        const nodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
+        const edges = Array.isArray(graphData?.edges) ? graphData.edges : [];
+        const meta = graphData?.meta || {};
+        const isFullMode = (meta.mode || "").toLowerCase() === "full";
+
+        if (!nodes.length) {
+            vizMeta.textContent = `${label}: 没有返回可展示的节点。`;
+            clearGraph();
+            return;
+        }
+
+        const showNodeText = nodes.length <= 70;
+        const nodeMap = new Map();
+        const categoriesMap = new Map();
+        const degreeMap = new Map();
+
+        nodes.forEach((n) => {
+            const labelName = (n.labels && n.labels[0]) ? n.labels[0] : "Node";
+            if (!categoriesMap.has(labelName)) {
+                categoriesMap.set(labelName, categoriesMap.size);
+            }
+            nodeMap.set(String(n.id), n);
+            degreeMap.set(String(n.id), 0);
+        });
+
+        edges.forEach((e) => {
+            const s = String(e.source);
+            const t = String(e.target);
+            degreeMap.set(s, (degreeMap.get(s) || 0) + 1);
+            degreeMap.set(t, (degreeMap.get(t) || 0) + 1);
+        });
+
+        const categories = Array.from(categoriesMap.keys()).map((name) => ({ name }));
+        renderLegend(categories.map((item) => item.name));
+        setGraphMetrics(meta, nodes, edges, label);
+
+        const chartNodes = [];
+        nodes.forEach((n) => {
+            const labelName = (n.labels && n.labels[0]) ? n.labels[0] : "Node";
+            const displayName = nodeLabel(n);
+            const degree = degreeMap.get(String(n.id)) || 0;
+            const symbolSize = Math.max(18, Math.min(46, 18 + degree * 2.8));
+            const importantNode = degree >= 3 || ["Supplier", "Order", "Product"].includes(labelName);
+            chartNodes.push({
+                id: String(n.id),
+                name: showNodeText || importantNode ? displayName : "",
+                value: displayName,
+                labelName,
+                rawId: String(n.id),
+                props: n.props || {},
+                category: categoriesMap.get(labelName),
+                symbolSize,
+                itemStyle: { color: labelColor(labelName) },
+                label: {
+                    show: showNodeText || importantNode,
+                    color: "#111111",
+                    fontSize: importantNode ? 11 : 10,
+                    fontWeight: 600,
+                    backgroundColor: "#fffdf8",
+                    borderColor: "#eadfce",
+                    borderWidth: 1,
+                    padding: [2, 4],
+                    borderRadius: 4,
+                },
+            });
+        });
+
+        const chartEdges = [];
+        const showEdgeLabel = edges.length <= 80;
+        edges.forEach((e) => {
+            const s = String(e.source);
+            const t = String(e.target);
+            if (!nodeMap.has(s) || !nodeMap.has(t)) return;
+            chartEdges.push({
+                source: s,
+                target: t,
+                value: e.type || "REL",
+                sourceName: nodeLabel(nodeMap.get(s)),
+                targetName: nodeLabel(nodeMap.get(t)),
+                lineStyle: { color: "#9b8a74", width: 1.8, opacity: 0.9 },
+                label: {
+                    show: showEdgeLabel,
+                    formatter: "{c}",
+                    color: "#111111",
+                    fontSize: 9,
+                    backgroundColor: "#fffdf8",
+                    padding: [1, 2],
+                    borderRadius: 2,
+                },
+            });
+        });
+
+        if (!graphChart) {
+            graphChart = echarts.init(graphCanvas);
+            window.addEventListener("resize", () => {
+                if (graphChart) graphChart.resize();
+            });
+        }
+
+        graphChart.setOption(
+            {
+                animationDuration: 450,
+                tooltip: {
+                    trigger: "item",
+                    formatter: (params) => {
+                        if (params.dataType === "edge") {
+                            const d = params.data || {};
+                            return `${d.sourceName || d.source} → ${d.targetName || d.target}<br/>Type: ${d.value || "REL"}`;
+                        }
+                        const d = params.data || {};
+                        return `${d.value || d.name}<br/>Type: ${d.labelName || "Node"}`;
+                    },
+                },
+                legend: [{ data: categories.map((c) => c.name), type: "scroll" }],
+                series: [
+                    {
+                        type: "graph",
+                        layout: "force",
+                        roam: true,
+                        draggable: true,
+                        data: chartNodes,
+                        links: chartEdges,
+                        categories,
+                        selectedMode: "single",
+                        edgeSymbol: ["none", "arrow"],
+                        edgeSymbolSize: 8,
+                        lineStyle: {
+                            color: "#9b8a74",
+                            width: 1.4,
+                            opacity: 0.68,
+                            curveness: 0.16,
+                        },
+                        label: { show: showNodeText },
+                        force: {
+                            repulsion: isFullMode ? 1000 : 1400,
+                            edgeLength: isFullMode ? [180, 260] : [240, 340],
+                            gravity: 0.06,
+                            friction: 0.12,
+                        },
+                        emphasis: {
+                            focus: "adjacency",
+                            scale: 1.08,
+                            lineStyle: { width: 2.6, color: "#5d5144", opacity: 1 },
+                        },
+                        blur: {
+                            itemStyle: { opacity: 0.18 },
+                            lineStyle: { opacity: 0.08 },
+                            label: { opacity: 0.12 },
+                        },
+                    },
+                ],
+            },
+            true
+        );
+
+        graphChart.off("click");
+        graphChart.on("click", (params) => {
+            if (params.dataType === "node") {
+                const d = params.data || {};
+                renderNodeInfo({
+                    label: d.labelName,
+                    rawId: d.rawId,
+                    displayName: d.value || d.name,
+                    props: d.props || {},
+                });
+            } else if (params.dataType === "edge") {
+                const d = params.data || {};
+                renderEdgeInfo({
+                    label: d.value || "REL",
+                    sourceName: d.sourceName || d.source,
+                    targetName: d.targetName || d.target,
+                });
+            } else {
+                renderNodeInfo(null);
+            }
+        });
+
+        const nodeCount = meta.node_count || nodes.length;
+        const edgeCount = meta.edge_count || edges.length;
+        const truncated = meta.truncated ? " | 已截断展示" : "";
+        vizMeta.textContent = `${label}: ${nodeCount} 个节点，${edgeCount} 条关系${truncated}`;
+    }
+
+    async function loadGraph(mode, questionOverride = null) {
+        const question = questionOverride ?? lastQuestion;
+        if (!question && mode === "focus") {
+            vizMeta.textContent = "请先提问，再加载聚焦图谱。";
+            return;
+        }
+
+        setGraphButtons(mode);
+        vizMeta.textContent = mode === "focus" ? "正在加载聚焦图谱..." : "正在加载全量图谱...";
+
+        try {
+            const resp = await fetch(GRAPH_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    question,
+                    mode,
+                    max_nodes: mode === "focus" ? 80 : 260,
+                    max_edges: mode === "focus" ? 150 : 520,
+                }),
+            });
+            if (!resp.ok) {
+                throw new Error("图谱接口请求失败");
+            }
+            const data = await resp.json();
+            renderGraph(data.graph || {}, mode === "focus" ? "聚焦图谱" : "全量图谱");
+        } catch (err) {
+            vizMeta.textContent = "图谱加载失败：" + err.message;
+        }
+    }
+
+    async function readSSEStream(response, handlers) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop() || "";
+
+            parts.forEach((part) => {
+                const lines = part.split(/\r?\n/);
+                let event = "message";
+                const dataLines = [];
+
+                lines.forEach((line) => {
+                    if (line.startsWith("event:")) {
+                        event = line.slice(6).trim();
+                    } else if (line.startsWith("data:")) {
+                        dataLines.push(line.slice(5).trim());
+                    }
+                });
+
+                if (!dataLines.length) return;
+                let payload = {};
+                try {
+                    payload = JSON.parse(dataLines.join("\n"));
+                } catch (err) {
+                    payload = { message: dataLines.join("\n") };
+                }
+
+                if (handlers[event]) {
+                    handlers[event](payload);
+                }
+            });
+        }
+    }
+
+    async function sendMessage() {
+        const text = input.value.trim();
+        if (!text) return;
+
+        lastQuestion = text;
+        appendMessage(text, "user");
+        const assistantNode = appendMessage("", "assistant");
+        input.value = "";
+        send.disabled = true;
+        typing.style.display = "block";
+        typing.textContent = "正在建立流式连接...";
+        setStatus("正在连接...");
+
+        try {
+            const response = await fetch(API_STREAM_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: text, conversation_id: conversationId })
+            });
+
+            if (!response.ok) {
+                throw new Error("后端未正常响应，请确认 FastAPI 服务已启动。");
+            }
+
+            let replyText = "";
+            let finalPayload = null;
+
+            await readSSEStream(response, {
+                status: (payload) => {
+                    const message = payload.message || "正在处理中...";
+                    typing.textContent = message;
+                    setStatus(message);
+                },
+                delta: (payload) => {
+                    replyText += payload.text || "";
+                    updateAssistantMessage(assistantNode, replyText);
+                },
+                done: (payload) => {
+                    finalPayload = payload;
+                    if (payload.reply) {
+                        replyText = payload.reply;
+                        updateAssistantMessage(assistantNode, replyText);
+                    }
+                    renderTrace(payload.trace);
+                    if (payload.conversation_id) {
+                        conversationId = payload.conversation_id;
+                        localStorage.setItem(sessionKey, conversationId);
+                    }
+                },
+                error: (payload) => {
+                    throw new Error(payload.message || "流式接口执行失败");
+                }
+            });
+
+            if (finalPayload?.reply) {
+                replyText = finalPayload.reply;
+                updateAssistantMessage(assistantNode, replyText);
+            }
+
+            setStatus("回答完成，正在刷新图谱...");
+            typing.textContent = "正在刷新图谱...";
+            await loadGraph("focus", text);
+            setStatus("已完成");
+        } catch (err) {
+            assistantNode.remove();
+            appendMessage("连接异常：" + err.message, "assistant");
+            setStatus("失败");
+        } finally {
+            send.disabled = false;
+            typing.style.display = "none";
+            typing.textContent = "正在分析供应链关系与指标...";
+            chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
+        }
+    }
+
+    send.addEventListener("click", sendMessage);
+    input.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendMessage();
+    });
+
+    chips.addEventListener("click", (e) => {
+        if (e.target.classList.contains("chip")) {
+            input.value = e.target.textContent;
+            input.focus();
+        }
+    });
+
+    resetBtn.addEventListener("click", () => {
+        chat.innerHTML = "";
+        chat.appendChild(typing);
+        clearTracePanel();
+        clearGraph();
+        vizMeta.textContent = "图谱尚未加载。";
+        appendMessage("对话已清空，可以继续提出新的问题。", "assistant");
+    });
+
+    newSessionBtn.addEventListener("click", () => {
+        conversationId = `conv_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        localStorage.setItem(sessionKey, conversationId);
+        chat.innerHTML = "";
+        chat.appendChild(typing);
+        clearTracePanel();
+        clearGraph();
+        vizMeta.textContent = "图谱尚未加载。";
+        appendMessage("已创建新会话，可以继续开始提问。", "assistant");
+        setStatus("会话已重置");
+    });
+
+    traceToggle.addEventListener("click", () => {
+        const collapsed = traceBody.style.display === "none";
+        if (collapsed) {
+            traceBody.style.display = "grid";
+            traceToggle.textContent = "Collapse";
+        } else {
+            traceBody.style.display = "none";
+            traceToggle.textContent = "Expand";
+        }
+    });
+
+    focusGraphBtn.addEventListener("click", () => {
+        loadGraph("focus");
+    });
+
+    fullGraphBtn.addEventListener("click", () => {
+        loadGraph("full");
+    });
+
+    clearTracePanel();
+    setGraphButtons("focus");
+</script>
+</body>
+</html>

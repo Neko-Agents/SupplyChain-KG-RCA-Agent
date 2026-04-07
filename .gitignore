@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+uploads/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build / logs
+*.log
+
+# Optional large local artifacts
+*.7z

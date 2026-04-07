@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SupplyChain 管理台 - 知识更新</title>
+  <style>
+    :root {
+      --bg: #f6f2ea;
+      --panel: #ffffff;
+      --border: #e4d8c6;
+      --ink: #1f1d1a;
+      --muted: #6c655a;
+      --brand: #2e6b5f;
+      --accent: #c3522f;
+      --card: #fffaf2;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Source Han Serif SC", "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #fff3da 0%, transparent 60%),
+        radial-gradient(900px 500px at 110% 10%, #efe7ff 0%, transparent 55%),
+        linear-gradient(180deg, var(--bg) 0%, #f0e6d6 100%);
+      padding: 24px;
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+      padding: 24px;
+      display: grid;
+      gap: 20px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.45rem;
+    }
+
+    p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .section-title {
+      margin-top: 4px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      background: var(--card);
+      display: grid;
+      gap: 12px;
+    }
+
+    .card h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    label {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    input[type="file"],
+    input[type="number"],
+    textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      font-size: 0.95rem;
+    }
+
+    textarea {
+      min-height: 150px;
+      resize: vertical;
+      line-height: 1.6;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .btn {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #fff;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+
+    .btn-primary {
+      background: var(--brand);
+      color: #fff;
+      border-color: var(--brand);
+    }
+
+    .result {
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      background: #fff;
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+      min-height: 80px;
+      line-height: 1.5;
+    }
+
+    .hint {
+      font-size: 0.85rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .tag {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--brand);
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div>
+      <h1>供应链知识更新台</h1>
+      <p>结构化数据用于主更新，文档和自然语言用于补充知识。系统会自动使用推荐策略，不再要求人工选择技术模式。</p>
+    </div>
+
+    <div class="section-title">结构化主更新</div>
+    <div class="grid">
+      <div class="card">
+        <div class="tag">主更新入口</div>
+        <h2>CSV 批量更新</h2>
+        <label>选择 CSV 文件（包含主数据或关系数据）</label>
+        <input id="csvFile" type="file" accept=".csv" />
+        <label>批处理大小</label>
+        <input id="csvBatch" type="number" value="2000" min="1" />
+        <div class="hint">系统固定采用“安全补全”策略：新增数据写入，已有数据仅补全空字段。</div>
+        <div class="row">
+          <button class="btn btn-primary" id="csvBtn">开始更新</button>
+        </div>
+        <div class="result" id="csvResult">等待操作</div>
+      </div>
+    </div>
+
+    <div class="section-title">补充知识</div>
+    <div class="grid">
+      <div class="card">
+        <div class="tag">文档补充</div>
+        <h2>PDF 文档补充更新</h2>
+        <label>选择 PDF 文件</label>
+        <input id="pdfFile" type="file" accept=".pdf" />
+        <label>批处理大小</label>
+        <input id="pdfBatch" type="number" value="2000" min="1" />
+        <div class="hint">系统自动使用“模板 + LLM 补全”的混合抽取方式，并以安全策略补充图谱。</div>
+        <div class="row">
+          <button class="btn btn-primary" id="pdfBtn">开始补充</button>
+        </div>
+        <div class="result" id="pdfResult">等待操作</div>
+        <div class="hint">如果提示缺少 `pypdf` 或 `OPENAI_API_KEY`，需要先补齐依赖或配置。</div>
+      </div>
+
+      <div class="card">
+        <div class="tag">人工补充</div>
+        <h2>文本补充更新</h2>
+        <label>输入自然语言说明</label>
+        <textarea id="textInput" placeholder="例如：订单 ORD-2024-100001 的供应商调整为长江存储 (YMTC)，承运商为跨越速运，物流风险升高。"></textarea>
+        <label>批处理大小</label>
+        <input id="textBatch" type="number" value="2000" min="1" />
+        <div class="hint">适合补充会议纪要、异常说明、供应商通报等非结构化内容。系统会自动用推荐方式抽取。</div>
+        <div class="row">
+          <button class="btn btn-primary" id="textBtn">开始补充</button>
+        </div>
+        <div class="result" id="textResult">等待操作</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "http://127.0.0.1:8000";
+
+    async function postFile(url, file, batchSize) {
+      const form = new FormData();
+      form.append("file", file);
+      if (batchSize) form.append("batch_size", batchSize);
+      const res = await fetch(url, { method: "POST", body: form });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function postJson(url, payload) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    document.getElementById("csvBtn").addEventListener("click", async () => {
+      const file = document.getElementById("csvFile").files[0];
+      const batch = document.getElementById("csvBatch").value;
+      const out = document.getElementById("csvResult");
+      if (!file) { out.textContent = "请先选择 CSV 文件"; return; }
+      out.textContent = "正在执行主更新...";
+      try {
+        const data = await postFile(API + "/api/ingest/csv", file, batch);
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.textContent = "更新失败: " + e.message;
+      }
+    });
+
+    document.getElementById("pdfBtn").addEventListener("click", async () => {
+      const file = document.getElementById("pdfFile").files[0];
+      const batch = document.getElementById("pdfBatch").value;
+      const out = document.getElementById("pdfResult");
+      if (!file) { out.textContent = "请先选择 PDF 文件"; return; }
+      out.textContent = "正在补充文档知识...";
+      try {
+        const data = await postFile(API + "/api/ingest/pdf", file, batch);
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.textContent = "补充失败: " + e.message;
+      }
+    });
+
+    document.getElementById("textBtn").addEventListener("click", async () => {
+      const text = document.getElementById("textInput").value.trim();
+      const batch = document.getElementById("textBatch").value;
+      const out = document.getElementById("textResult");
+      if (!text) { out.textContent = "请先输入文本"; return; }
+      out.textContent = "正在补充文本知识...";
+      try {
+        const data = await postJson(API + "/api/ingest/text", {
+          text,
+          batch_size: Number(batch) || 2000
+        });
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.textContent = "补充失败: " + e.message;
+      }
+    });
+  </script>
+</body>
+</html>
