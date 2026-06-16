@@ -16,7 +16,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
-from neo4j import GraphDatabase
+
+try:
+    from neo4j import GraphDatabase
+except Exception:  # pragma: no cover - optional dependency for preview-only flows
+    GraphDatabase = None  # type: ignore
 
 try:
     from pypdf import PdfReader  # type: ignore
@@ -56,7 +60,428 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "88888888")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.deepseek.com/v1")
 MODEL_NAME = os.getenv("LLM_MODEL", "deepseek-chat")
+LONG_TEXT_CHUNK_TRIGGER = int(os.getenv("INGEST_LLM_CHUNK_TRIGGER", "5000"))
+LONG_TEXT_CHUNK_CHARS = int(os.getenv("INGEST_LLM_CHUNK_CHARS", "3200"))
+LONG_TEXT_CHUNK_OVERLAP = int(os.getenv("INGEST_LLM_CHUNK_OVERLAP", "300"))
 # ================================================
+
+
+def _strip_markdown_fences(text: str) -> str:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+ID_PATTERN_MAP = {
+    "customer_id": r"\bCUST-\d+\b",
+    "order_id": r"\bORD-\d{4}-\d+\b",
+    "product_id": r"\bSKU-[A-Z0-9\-]+\b",
+}
+
+RELATION_SCHEMA = {
+    "PLACED_ORDER": ("Customer", "Order"),
+    "CONTAINS_PRODUCT": ("Order", "Product"),
+    "BELONGS_TO_CATEGORY": ("Product", "Category"),
+    "BELONGS_TO_DEPARTMENT": ("Category", "Department"),
+    "SUPPLIES_COMPONENT": ("Supplier", "Component"),
+    "USED_IN": ("Component", "Product"),
+    "SHIPPED_BY": ("Order", "Carrier"),
+}
+
+MUNICIPALITY_NAMES = {"北京", "上海", "天津", "重庆"}
+
+NAME_LIKE_FIELDS = {
+    "customer_name",
+    "customer_city",
+    "customer_province",
+    "customer_country",
+    "category_name",
+    "department_name",
+    "supplier_name",
+    "supplier_city",
+    "component_name",
+    "carrier_name",
+    "product_name",
+    "product_desc",
+    "payment_type",
+    "order_status",
+    "delivery_status",
+    "trans_mode",
+    "ship_mode",
+}
+
+NAME_BASED_ENTITY_TYPES = {"Category", "Department", "Supplier", "Component", "Carrier"}
+ID_BASED_ENTITY_TYPES = {"Customer", "Order", "Product"}
+
+TEXT_FIELD_MAX_LENGTH = {
+    "product_desc": 500,
+    "customer_street": 200,
+    "_default": 120,
+}
+
+RELATION_ERROR_EXAMPLE_LIMIT = 10
+
+
+def _prepare_text_for_extraction(text: str) -> str:
+    cleaned = text or ""
+    cleaned = re.sub(r"```[\s\S]*?```", "\n", cleaned)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = cleaned.replace("\u3000", " ")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _unwrap_pdf_value_lines(text: str) -> str:
+    value = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    value = re.sub(r"(?<=[\u4e00-\u9fff])\s*\n\s*(?=[\u4e00-\u9fff])", "", value)
+    value = re.sub(r"(?<=[A-Za-z0-9])\s*\n\s*(?=[A-Za-z])", " ", value)
+    value = re.sub(r"(?<=[\u4e00-\u9fff])\s*\n\s*(?=[A-Za-z0-9\(])", " ", value)
+    value = re.sub(r"(?<=[A-Za-z0-9\)])\s*\n\s*(?=[\u4e00-\u9fff])", "", value)
+    value = re.sub(r"(?<=\()\s*\n\s*(?=[A-Za-z])", "", value)
+    value = re.sub(r"(?<=[A-Za-z])\s*\n\s*(?=\))", "", value)
+    return value
+
+
+def _is_noisy_field_value(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return True
+    if "```" in text:
+        return True
+    if len(text) > 80 and (text.count("{") + text.count("}") + text.count("[") + text.count("]")) >= 4:
+        return True
+    lowered = text.lower()
+    if lowered.startswith(("json:", "python:", "sql:", "cypher:")):
+        return True
+    return False
+
+
+def _clip_text_field(key: str, value: str) -> str:
+    limit = TEXT_FIELD_MAX_LENGTH.get(key, TEXT_FIELD_MAX_LENGTH["_default"])
+    return value[:limit].strip()
+
+
+def _clean_scalar_text(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    cleaned = _strip_markdown_fences(value)
+    cleaned = cleaned.replace("`", " ")
+    cleaned = _unwrap_pdf_value_lines(cleaned)
+    cleaned = cleaned.replace("\u3000", " ")
+    cleaned = re.sub(r"^(?:[\-\*\u2022]+|\d{1,3}[.)])\s*", "", cleaned)
+    cleaned = re.sub(
+        r"^(?:[A-Za-z_][A-Za-z0-9_ \-]{0,30}|[\u4e00-\u9fff]{1,12})\s*[:：]\s*",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(r"\n+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip(" \t\n\r\"'`，,；;")
+    return cleaned or None
+
+
+def _clean_identifier_field(key: str, value: Any) -> Optional[str]:
+    cleaned = _clean_scalar_text(value)
+    if not cleaned:
+        return None
+    pattern = ID_PATTERN_MAP.get(key)
+    if not pattern:
+        return str(cleaned)
+    compact = re.sub(r"\s+", "", str(cleaned))
+    match = re.search(pattern, compact, re.I)
+    if not match:
+        return None
+    return match.group(0).upper()
+
+
+def _clean_text_field(key: str, value: Any) -> Optional[str]:
+    cleaned = _clean_scalar_text(value)
+    if not cleaned:
+        return None
+    cleaned = str(cleaned)
+    if _is_noisy_field_value(cleaned):
+        return None
+    return _clip_text_field(key, cleaned)
+
+
+def _normalize_location_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value).strip()
+    text = re.sub(r"(省|市|自治区|特别行政区)$", "", text)
+    text = re.sub(r"(壮族自治区|回族自治区|维吾尔自治区)$", "", text)
+    text = re.sub(r"\s+", "", text)
+    return text or None
+
+
+def _normalize_display_text(key: str, value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value).strip()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*\(\s*", " (", text)
+    text = re.sub(r"\s*\)\s*", ")", text)
+    text = re.sub(r"([A-Za-z0-9])\(", r"\1 (", text)
+
+    if key == "product_name":
+        text = re.sub(r"(\d+寸)(?=[^\s])", r"\1 ", text)
+        text = re.sub(r"(\d+K超清)(?=[^\s])", r"\1 ", text)
+        text = re.sub(r"(AI手机\s*\d+)(?=Pro\b)", r"\1 ", text)
+        text = re.sub(r"(无线VR一体机)(?=[^\s])", r"\1 ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+
+    if key in {"customer_city", "customer_province", "supplier_city"}:
+        return _normalize_location_name(text)
+
+    return text.strip()
+
+
+def _postprocess_record_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(row)
+    for key in NAME_LIKE_FIELDS:
+        if key in out and out[key] is not None:
+            out[key] = _normalize_display_text(key, out[key])
+
+    city = out.get("customer_city")
+    province = out.get("customer_province")
+    if city and province and city == province and city not in MUNICIPALITY_NAMES:
+        out["customer_province"] = None
+
+    supplier_city = out.get("supplier_city")
+    if supplier_city and supplier_city not in MUNICIPALITY_NAMES and supplier_city == out.get("customer_city"):
+        out["supplier_city"] = supplier_city
+
+    return out
+
+
+def _coerce_float_value(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace("，", ",").replace("％", "%")
+    text = re.sub(r"[。；;、]+$", "", text)
+    text = re.sub(r"(元|天|件|笔|%)$", "", text)
+    text = text.replace(",", "")
+    text = re.sub(r"(?<=\d)%$", "", text)
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _coerce_int_value(value: Any) -> Optional[int]:
+    number = _coerce_float_value(value)
+    if number is None:
+        return None
+    try:
+        return int(number)
+    except Exception:
+        return None
+
+
+def _merge_sparse_rows(rows: List[Dict[str, Any]], key_fn) -> List[Dict[str, Any]]:
+    merged: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    fallback: List[Dict[str, Any]] = []
+    for row in rows:
+        key = key_fn(row)
+        if key is None:
+            fallback.append(row)
+            continue
+        if key not in merged:
+            merged[key] = dict(row)
+            continue
+        target = merged[key]
+        for field, value in row.items():
+            if target.get(field) in (None, "") and value not in (None, ""):
+                target[field] = value
+    return list(merged.values()) + fallback
+
+
+def _entity_record_key(record: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
+    for key in (
+        "customer_id",
+        "order_id",
+        "product_id",
+        "category_name",
+        "department_name",
+        "supplier_name",
+        "component_name",
+        "carrier_name",
+    ):
+        value = record.get(key)
+        if value:
+            return (key, value)
+    return None
+
+
+def _relation_record_key(record: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
+    src_ref = record.get("src_id") or record.get("src_name")
+    dst_ref = record.get("dst_id") or record.get("dst_name")
+    if not all([record.get("src_type"), record.get("rel_type"), record.get("dst_type"), src_ref, dst_ref]):
+        return None
+    return (
+        record.get("src_type"),
+        src_ref,
+        record.get("rel_type"),
+        record.get("dst_type"),
+        dst_ref,
+    )
+
+
+def _node_ref_complete(row: Dict[str, Any], prefix: str) -> bool:
+    node_type = row.get(f"{prefix}_type")
+    if not node_type:
+        return False
+    if node_type in ID_BASED_ENTITY_TYPES:
+        return bool(row.get(f"{prefix}_id"))
+    return bool(row.get(f"{prefix}_name"))
+
+
+def _split_oversized_text_unit(text: str, max_chars: int) -> List[str]:
+    normalized = (text or "").strip()
+    if not normalized:
+        return []
+    if len(normalized) <= max_chars:
+        return [normalized]
+
+    sentences = [
+        seg.strip()
+        for seg in re.split(r"(?<=[。！？!?；;])\s+|(?<=\.)\s+(?=[A-Z])", normalized)
+        if seg.strip()
+    ]
+    if len(sentences) <= 1:
+        return [normalized[i : i + max_chars] for i in range(0, len(normalized), max_chars)]
+
+    parts: List[str] = []
+    current = ""
+    for sentence in sentences:
+        candidate = f"{current}\n{sentence}".strip() if current else sentence
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            parts.append(current)
+        if len(sentence) <= max_chars:
+            current = sentence
+        else:
+            parts.extend(
+                [sentence[i : i + max_chars] for i in range(0, len(sentence), max_chars)]
+            )
+            current = ""
+    if current:
+        parts.append(current)
+    return parts
+
+
+def _build_overlap_prefix(text: str, overlap_chars: int) -> str:
+    if overlap_chars <= 0 or not text:
+        return ""
+    tail = text[-overlap_chars:].strip()
+    if not tail:
+        return ""
+    return tail
+
+
+def _split_long_text_for_llm(
+    text: str,
+    max_chars: int = LONG_TEXT_CHUNK_CHARS,
+    overlap_chars: int = LONG_TEXT_CHUNK_OVERLAP,
+) -> List[str]:
+    prepared = _prepare_text_for_extraction(text)
+    if not prepared:
+        return []
+    if len(prepared) <= max_chars:
+        return [prepared]
+
+    blocks = _split_text_blocks(prepared) or [prepared]
+    units: List[str] = []
+    for block in blocks:
+        units.extend(_split_oversized_text_unit(block, max_chars))
+
+    chunks: List[str] = []
+    current = ""
+    for unit in units:
+        candidate = f"{current}\n\n{unit}".strip() if current else unit
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        overlap_prefix = _build_overlap_prefix(chunks[-1], overlap_chars) if chunks else ""
+        current = f"{overlap_prefix}\n\n{unit}".strip() if overlap_prefix else unit
+        if len(current) > max_chars:
+            pieces = _split_oversized_text_unit(current, max_chars)
+            chunks.extend(pieces[:-1])
+            current = pieces[-1] if pieces else ""
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _extract_balanced_json_object(text: str) -> Optional[str]:
+    """Return the first balanced JSON object found in text."""
+    if not text:
+        return None
+
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for idx in range(start, len(text)):
+        ch = text[idx]
+
+        if escape:
+            escape = False
+            continue
+
+        if ch == "\\":
+            escape = True
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+
+    return None
+
+
+def _repair_json_with_llm(raw_content: str, llm: Any) -> Dict[str, Any]:
+    repair_prompt = (
+        "Convert the following content into ONE valid JSON object only. "
+        'Return strictly JSON with top-level keys "entities" and "relations". '
+        "Do not add explanations, markdown, or code fences. "
+        "If a field is uncertain, omit it. "
+        "Content to repair:\n"
+        f"{raw_content}"
+    )
+
+    repaired_msg = llm.invoke(repair_prompt)
+    repaired_content = _strip_markdown_fences(
+        getattr(repaired_msg, "content", "") or ""
+    )
+    candidate = _extract_balanced_json_object(repaired_content) or repaired_content
+    return json.loads(candidate)
 
 
 # Internal normalized keys for ingestion.
@@ -459,26 +884,21 @@ def _sanitize_row(row: Dict[str, Any]) -> Dict[str, Any]:
         if key not in INTERNAL_KEYS:
             continue
         if isinstance(val, str):
-            val = val.strip()
-            if val == "":
-                val = None
+            if key.endswith("_id"):
+                val = _clean_identifier_field(key, val)
+            else:
+                val = _clean_text_field(key, val)
         out[key] = val
 
     # Coerce numeric fields
     for key in NUMERIC_FLOAT_FIELDS:
         if key in out and out[key] is not None:
-            try:
-                out[key] = float(out[key])
-            except Exception:
-                out[key] = None
+            out[key] = _coerce_float_value(out[key])
     for key in NUMERIC_INT_FIELDS:
         if key in out and out[key] is not None:
-            try:
-                out[key] = int(float(out[key]))
-            except Exception:
-                out[key] = None
+            out[key] = _coerce_int_value(out[key])
 
-    return out
+    return _postprocess_record_fields(out)
 
 
 def _df_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -512,6 +932,10 @@ def _chunked(records: List[Dict[str, Any]], size: int) -> Iterable[List[Dict[str
 
 
 def _get_driver():
+    if GraphDatabase is None:
+        raise RuntimeError(
+            "neo4j not installed. Please install neo4j before running import/write operations."
+        )
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 
@@ -809,7 +1233,118 @@ def _normalize_relation_row(row: Dict[str, Any]) -> Dict[str, Any]:
         out["dst_type"] = NODE_LABEL_ALIASES.get(str(out["dst_type"]).strip(), str(out["dst_type"]).strip())
     if "rel_type" in out and out["rel_type"] is not None:
         out["rel_type"] = REL_TYPE_ALIASES.get(str(out["rel_type"]).strip(), str(out["rel_type"]).strip())
+    if "src_id" in out:
+        out["src_id"] = _clean_identifier_field("customer_id", out["src_id"]) if out.get("src_type") == "Customer" else (
+            _clean_identifier_field("order_id", out["src_id"]) if out.get("src_type") == "Order" else (
+                _clean_identifier_field("product_id", out["src_id"]) if out.get("src_type") == "Product" else _clean_text_field("src_id", out["src_id"])
+            )
+        )
+    if "dst_id" in out:
+        out["dst_id"] = _clean_identifier_field("customer_id", out["dst_id"]) if out.get("dst_type") == "Customer" else (
+            _clean_identifier_field("order_id", out["dst_id"]) if out.get("dst_type") == "Order" else (
+                _clean_identifier_field("product_id", out["dst_id"]) if out.get("dst_type") == "Product" else _clean_text_field("dst_id", out["dst_id"])
+            )
+        )
+    if "src_name" in out:
+        out["src_name"] = _normalize_display_text("src_name", _clean_text_field("src_name", out["src_name"]))
+    if "dst_name" in out:
+        out["dst_name"] = _normalize_display_text("dst_name", _clean_text_field("dst_name", out["dst_name"]))
     return out
+
+
+def _relation_row_ref_value(row: Dict[str, Any], side: str) -> Optional[str]:
+    rtype = row.get(f"{side}_type")
+    if rtype in ID_BASED_ENTITY_TYPES:
+        return row.get(f"{side}_id")
+    if rtype in NAME_BASED_ENTITY_TYPES:
+        return row.get(f"{side}_name")
+    return None
+
+
+def _validate_relation_row(row: Dict[str, Any]) -> Optional[str]:
+    src_type = row.get("src_type")
+    dst_type = row.get("dst_type")
+    rel_type = row.get("rel_type")
+
+    if not rel_type:
+        return "missing rel_type"
+    if rel_type not in RELATION_SCHEMA:
+        return f"unsupported rel_type: {rel_type}"
+    if not src_type:
+        return "missing src_type"
+    if not dst_type:
+        return "missing dst_type"
+    if src_type not in ID_BASED_ENTITY_TYPES and src_type not in NAME_BASED_ENTITY_TYPES:
+        return f"unsupported src_type: {src_type}"
+    if dst_type not in ID_BASED_ENTITY_TYPES and dst_type not in NAME_BASED_ENTITY_TYPES:
+        return f"unsupported dst_type: {dst_type}"
+
+    expected_src, expected_dst = RELATION_SCHEMA[rel_type]
+    if src_type != expected_src or dst_type != expected_dst:
+        return (
+            f"schema mismatch for {rel_type}: expected "
+            f"{expected_src}->{expected_dst}, got {src_type}->{dst_type}"
+        )
+
+    if expected_src in ID_BASED_ENTITY_TYPES and not row.get("src_id"):
+        return f"missing src_id for {expected_src}"
+    if expected_src in NAME_BASED_ENTITY_TYPES and not row.get("src_name"):
+        return f"missing src_name for {expected_src}"
+    if expected_dst in ID_BASED_ENTITY_TYPES and not row.get("dst_id"):
+        return f"missing dst_id for {expected_dst}"
+    if expected_dst in NAME_BASED_ENTITY_TYPES and not row.get("dst_name"):
+        return f"missing dst_name for {expected_dst}"
+
+    return None
+
+
+def _relation_error_example(
+    row_number: int, row: Dict[str, Any], reason: str
+) -> Dict[str, Any]:
+    return {
+        "row_number": row_number,
+        "reason": reason,
+        "src_type": row.get("src_type"),
+        "src_ref": _relation_row_ref_value(row, "src"),
+        "rel_type": row.get("rel_type"),
+        "dst_type": row.get("dst_type"),
+        "dst_ref": _relation_row_ref_value(row, "dst"),
+    }
+
+
+def _prepare_relation_records(df: pd.DataFrame) -> Dict[str, Any]:
+    df = _rename_columns(df)
+    df = df.replace({pd.NA: None})
+    df = df.where(pd.notnull(df), None)
+
+    normalized_records: List[Dict[str, Any]] = []
+    relation_counts: Dict[str, int] = {}
+    error_examples: List[Dict[str, Any]] = []
+    skipped_rows = 0
+
+    for row_number, raw in enumerate(df.to_dict(orient="records"), start=1):
+        normalized = _normalize_relation_row(raw)
+        error_reason = _validate_relation_row(normalized)
+        if error_reason:
+            skipped_rows += 1
+            if len(error_examples) < RELATION_ERROR_EXAMPLE_LIMIT:
+                error_examples.append(
+                    _relation_error_example(row_number, normalized, error_reason)
+                )
+            continue
+
+        normalized_records.append(normalized)
+        rel_type = str(normalized.get("rel_type") or "").strip()
+        relation_counts[rel_type] = relation_counts.get(rel_type, 0) + 1
+
+    return {
+        "records": normalized_records,
+        "input_rows": len(df),
+        "valid_rows": len(normalized_records),
+        "skipped_rows": skipped_rows,
+        "relation_counts": relation_counts,
+        "error_examples": error_examples,
+    }
 
 
 def _upsert_relation_batch(tx, rows: List[Dict[str, Any]], update_mode: str) -> None:
@@ -1002,16 +1537,19 @@ def ingest_relation_csv(
     path: str, batch_size: int = 2000, update_mode: str = "safe"
 ) -> Dict[str, Any]:
     df = _read_csv(path)
-    df = _rename_columns(df)
-    df = df.replace({pd.NA: None})
-    df = df.where(pd.notnull(df), None)
-
-    records = []
-    for raw in df.to_dict(orient="records"):
-        records.append(_normalize_relation_row(raw))
+    prepared = _prepare_relation_records(df)
+    records = prepared["records"]
 
     if not records:
-        return {"rows": 0, "batches": 0}
+        return {
+            "rows": 0,
+            "batches": 0,
+            "input_rows": prepared["input_rows"],
+            "valid_rows": prepared["valid_rows"],
+            "skipped_rows": prepared["skipped_rows"],
+            "relation_counts": prepared["relation_counts"],
+            "error_examples": prepared["error_examples"],
+        }
 
     update_mode = (update_mode or "safe").lower()
     if update_mode not in {"safe", "overwrite"}:
@@ -1024,7 +1562,15 @@ def ingest_relation_csv(
                 session.execute_write(_upsert_relation_batch, batch, update_mode)
                 batch_count += 1
 
-    return {"rows": len(records), "batches": batch_count}
+    return {
+        "rows": len(records),
+        "batches": batch_count,
+        "input_rows": prepared["input_rows"],
+        "valid_rows": prepared["valid_rows"],
+        "skipped_rows": prepared["skipped_rows"],
+        "relation_counts": prepared["relation_counts"],
+        "error_examples": prepared["error_examples"],
+    }
 
 def ingest_csv(
     path: str, batch_size: int = 2000, update_mode: str = "safe"
@@ -1068,9 +1614,44 @@ def _split_text_blocks(text: str) -> List[str]:
     return refined
 
 
+def _extract_template_fields_from_segment(
+    segment: str,
+    label_map: Dict[str, str],
+) -> Dict[str, Any]:
+    normalized_segment = _unwrap_pdf_value_lines(segment)
+    if not normalized_segment.strip():
+        return {}
+
+    label_pattern = "|".join(
+        sorted((re.escape(label) for label in label_map.keys()), key=len, reverse=True)
+    )
+    matches = list(
+        re.finditer(rf"(?P<label>{label_pattern})\s*[:\uFF1A]\s*", normalized_segment)
+    )
+    if not matches:
+        return {}
+
+    record: Dict[str, Any] = {}
+    for idx, match in enumerate(matches):
+        label = match.group("label")
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(normalized_segment)
+        value = normalized_segment[start:end]
+        value = re.split(
+            r"\n\s*(?:\d+\.\d+\s*订单案例|\d+\.\d+|[一二三四五六七八九十]+、|供应商观察：|附录说明[一二三四五六七八九十]：|文档尾注：)",
+            value,
+            maxsplit=1,
+        )[0]
+        value = re.sub(r"^[；;，,\s]+|[；;，,\s]+$", "", value)
+        if value.strip():
+            record[label_map[label]] = value.strip()
+    return record
+
+
 def _template_extract(text: str) -> List[Dict[str, Any]]:
     # Simple key-value extraction (supports Chinese/English labels).
     # Example: 订单ID: ORD-2024-100001
+    text = _prepare_text_for_extraction(text)
     label_map = {
         "客户ID": "customer_id",
         "客户姓名": "customer_name",
@@ -1122,15 +1703,15 @@ def _template_extract(text: str) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for block in _split_text_blocks(text):
         record: Dict[str, Any] = {}
-        for label, key in label_map.items():
-            pattern = rf"{re.escape(label)}\s*[:\uFF1A]\s*([^\n\r;\uFF1B,，]+)"
-            m = re.search(pattern, block)
-            if m:
-                record[key] = m.group(1).strip()
+        fact_match = re.search(r"事实摘录\s*[:：](.*)", block, re.S)
+        if fact_match:
+            record = _extract_template_fields_from_segment(fact_match.group(1), label_map)
+        if not record:
+            record = _extract_template_fields_from_segment(block, label_map)
         if record:
             record["last_updated_time"] = _now_iso()
             records.append(_sanitize_row(record))
-    return records
+    return _merge_sparse_rows(records, _record_key)
 
 
 def _llm_extract(text: str, partial: Optional[Any] = None) -> List[Dict[str, Any]]:
@@ -1146,6 +1727,7 @@ def _llm_extract(text: str, partial: Optional[Any] = None) -> List[Dict[str, Any
 
     allowed = ", ".join(INTERNAL_KEYS)
     partial_json = json.dumps(partial or {}, ensure_ascii=False)
+    text = _prepare_text_for_extraction(text)
 
     prompt = (
         "You are a data extraction assistant for a supply-chain knowledge graph. "
@@ -1153,13 +1735,24 @@ def _llm_extract(text: str, partial: Optional[Any] = None) -> List[Dict[str, Any
         "Return ONLY valid JSON array (no markdown). "
         "Each record is an object with keys from the allowed set. "
         "Do NOT invent values; only extract what is explicitly stated. "
+        "Remove formatting noise such as code fences, inline code, stray newlines, labels copied into values, and markdown bullets. "
+        "Do not put JSON/code fragments into field values. "
+        "For location fields, only fill province/city/country when the text explicitly states them. "
+        "Do not infer province from city names. "
+        "Preserve company names, product names, and carrier names as written in the text. "
         f"Allowed keys: {allowed}. "
         f"If partial data is provided, only fill missing keys when explicitly present. "
         f"Partial data: {partial_json}\n\n"
         f"Text:\n{text}"
     )
 
-    msg = llm.invoke(prompt)
+    try:
+        msg = llm.invoke(prompt)
+    except Exception as e:
+        raise RuntimeError(
+            "LLM extraction request failed. Please verify OPENAI_API_KEY, OPENAI_API_BASE, "
+            "model availability, and local network access."
+        ) from e
     content = getattr(msg, "content", "") or ""
 
     try:
@@ -1179,7 +1772,7 @@ def _llm_extract(text: str, partial: Optional[Any] = None) -> List[Dict[str, Any
         if isinstance(item, dict):
             item.setdefault("last_updated_time", _now_iso())
             records.append(_sanitize_row(item))
-    return records
+    return _merge_sparse_rows(records, _record_key)
 
 
 def _record_key(rec: Dict[str, Any]) -> Tuple:
@@ -1187,7 +1780,9 @@ def _record_key(rec: Dict[str, Any]) -> Tuple:
         return ("order_id", rec.get("order_id"))
     if rec.get("product_id"):
         return ("product_id", rec.get("product_id"))
-    return ("cust_supp", rec.get("customer_id"), rec.get("supplier_name"))
+    if rec.get("customer_id") or rec.get("supplier_name"):
+        return ("cust_supp", rec.get("customer_id"), rec.get("supplier_name"))
+    return ("row", id(rec))
 
 
 def _merge_records(base: List[Dict[str, Any]], extra: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1225,27 +1820,18 @@ def extract_records_from_text(text: str, mode: str = "hybrid") -> List[Dict[str,
     if template_records:
         try:
             llm_records = _llm_extract(text, partial=template_records)
-            return _merge_records(template_records, llm_records)
+            return _merge_sparse_rows(_merge_records(template_records, llm_records), _record_key)
         except Exception:
-            return template_records
-    return _llm_extract(text)
+            return _merge_sparse_rows(template_records, _record_key)
+    return _merge_sparse_rows(_llm_extract(text), _record_key)
 
 
-def _llm_extract_graph(text: str) -> Dict[str, List[Dict[str, Any]]]:
-    if ChatOpenAI is None:
-        raise RuntimeError("langchain_openai not installed. Cannot run LLM extraction.")
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is not set. Cannot run LLM extraction.")
-
-    os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
-    os.environ.setdefault("OPENAI_API_BASE", OPENAI_API_BASE)
-
-    llm = ChatOpenAI(temperature=0, model=MODEL_NAME)
-
+def _build_llm_graph_prompt(text: str) -> str:
     allowed_nodes = ", ".join(sorted(set(NODE_LABEL_ALIASES.values())))
     allowed_rels = ", ".join(sorted(set(REL_TYPE_ALIASES.values())))
+    text = _prepare_text_for_extraction(text)
 
-    prompt = (
+    return (
         "You are an information extraction engine for a supply-chain knowledge graph. "
         "Extract entities and relations from the text and return ONLY valid JSON (no markdown). "
         "Schema constraints:\n"
@@ -1263,21 +1849,75 @@ def _llm_extract_graph(text: str) -> Dict[str, List[Dict[str, Any]]]:
         "}\n"
         "Rules:\n"
         "- Only use allowed types. If uncertain, omit.\n"
-        "- Use id for Customer/Order/Product; use name for Category/Department/Supplier/Component/Carrier.\n"
+        "- Use id only for Customer/Order/Product, and only when the id is explicitly stated in the text.\n"
+        "- Use name for Category/Department/Supplier/Component/Carrier. Do not create synthetic ids for these types.\n"
+        "- Relationship schema must be exactly:\n"
+        "  * PLACED_ORDER: Customer -> Order\n"
+        "  * CONTAINS_PRODUCT: Order -> Product\n"
+        "  * BELONGS_TO_CATEGORY: Product -> Category\n"
+        "  * BELONGS_TO_DEPARTMENT: Category -> Department\n"
+        "  * SUPPLIES_COMPONENT: Supplier -> Component\n"
+        "  * USED_IN: Component -> Product\n"
+        "  * SHIPPED_BY: Order -> Carrier\n"
+        "- Do NOT output Product -> Department for BELONGS_TO_DEPARTMENT.\n"
         "- Do NOT invent values.\n"
+        "- Remove formatting noise such as code fences, inline code, markdown bullets, and newline pollution from values.\n"
+        "- Do not copy field labels like 'supplier_name:' or 'order_id:' into values.\n"
+        "- For customer location properties, only include province/city/country when they are explicitly stated. Do not infer province from city names.\n"
+        "- When the text explicitly provides entity properties, include them:\n"
+        "  * Customer.properties: city, country, province, street, segment, email\n"
+        "  * Order.properties: status, payment_type, order_date, shipping_date, scheduled_date, actual_date\n"
+        "  * Product.properties: sku, description, base_price\n"
+        "  * Supplier.properties: city\n"
+        "- When the text explicitly provides relation properties, include them instead of leaving an empty object:\n"
+        "  * CONTAINS_PRODUCT.properties: quantity, gross_total, discount_rate, discount_amount, net_total, profit, profit_ratio\n"
+        "  * SUPPLIES_COMPONENT.properties: mfg_cost, defect_rate\n"
+        "  * SHIPPED_BY.properties: trans_mode, ship_mode, days_scheduled, days_real, late_risk, delivery_status\n"
+        "- Prefer preserving numeric values exactly as written in the text.\n"
+        "- Deduplicate repeated entities and repeated relations.\n"
+        "- Keep the output concise and valid. Prefer the most important entities and relations only.\n"
+        "- Return at most 80 entities and 120 relations.\n"
         f"Text:\n{text}"
     )
 
-    msg = llm.invoke(prompt)
-    content = getattr(msg, "content", "") or ""
+
+def _llm_extract_graph_raw_response(text: str) -> str:
+    if ChatOpenAI is None:
+        raise RuntimeError("langchain_openai not installed. Cannot run LLM extraction.")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not set. Cannot run LLM extraction.")
+
+    os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
+    os.environ.setdefault("OPENAI_API_BASE", OPENAI_API_BASE)
+
+    llm = ChatOpenAI(temperature=0, model=MODEL_NAME)
+    prompt = _build_llm_graph_prompt(text)
+
+    try:
+        msg = llm.invoke(prompt)
+    except Exception as e:
+        raise RuntimeError(
+            "LLM graph extraction request failed. Please verify OPENAI_API_KEY, OPENAI_API_BASE, "
+            "model availability, and local network access."
+        ) from e
+    return getattr(msg, "content", "") or ""
+
+
+def _parse_llm_graph_response(raw_content: str) -> Dict[str, List[Dict[str, Any]]]:
+    content = _strip_markdown_fences(raw_content)
+    llm = ChatOpenAI(temperature=0, model=MODEL_NAME)
 
     try:
         data = json.loads(content)
     except Exception:
-        m = re.search(r"\{.*\}", content, re.S)
-        if not m:
-            raise RuntimeError("LLM output is not valid JSON.")
-        data = json.loads(m.group(0))
+        candidate = _extract_balanced_json_object(content)
+        if candidate is not None:
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                data = _repair_json_with_llm(content, llm)
+        else:
+            data = _repair_json_with_llm(content, llm)
 
     if not isinstance(data, dict):
         raise RuntimeError("LLM output is not a JSON object.")
@@ -1286,6 +1926,39 @@ def _llm_extract_graph(text: str) -> Dict[str, List[Dict[str, Any]]]:
     if not isinstance(entities, list) or not isinstance(relations, list):
         raise RuntimeError("LLM output missing entities/relations lists.")
     return {"entities": entities, "relations": relations}
+
+
+def _merge_graph_payloads(payloads: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[Dict[str, Any]]]:
+    merged_entities: List[Dict[str, Any]] = []
+    merged_relations: List[Dict[str, Any]] = []
+    for payload in payloads:
+        entities = payload.get("entities") or []
+        relations = payload.get("relations") or []
+        for ent in entities:
+            if isinstance(ent, dict):
+                merged_entities.append(ent)
+        for rel in relations:
+            if isinstance(rel, dict):
+                merged_relations.append(rel)
+    return {"entities": merged_entities, "relations": merged_relations}
+
+
+def _llm_extract_graph(text: str) -> Dict[str, List[Dict[str, Any]]]:
+    prepared = _prepare_text_for_extraction(text)
+    if len(prepared) <= LONG_TEXT_CHUNK_TRIGGER:
+        raw_content = _llm_extract_graph_raw_response(prepared)
+        return _parse_llm_graph_response(raw_content)
+
+    chunks = _split_long_text_for_llm(
+        prepared,
+        max_chars=LONG_TEXT_CHUNK_CHARS,
+        overlap_chars=LONG_TEXT_CHUNK_OVERLAP,
+    )
+    payloads: List[Dict[str, List[Dict[str, Any]]]] = []
+    for chunk in chunks:
+        raw_content = _llm_extract_graph_raw_response(chunk)
+        payloads.append(_parse_llm_graph_response(raw_content))
+    return _merge_graph_payloads(payloads)
 
 
 def _normalize_entity_record(ent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1300,10 +1973,10 @@ def _normalize_entity_record(ent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     record: Dict[str, Any] = {"last_updated_time": _now_iso()}
 
     if etype == "Customer":
-        cid = ent.get("id")
+        cid = _clean_identifier_field("customer_id", ent.get("id"))
         if not cid:
             return None
-        record["customer_id"] = str(cid).strip()
+        record["customer_id"] = cid
         record["customer_name"] = ent.get("name") or props.get("name")
         record["customer_email"] = props.get("email")
         record["customer_segment"] = props.get("segment")
@@ -1314,10 +1987,10 @@ def _normalize_entity_record(ent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         record["customer_lat"] = props.get("lat")
         record["customer_lon"] = props.get("lon")
     elif etype == "Order":
-        oid = ent.get("id")
+        oid = _clean_identifier_field("order_id", ent.get("id"))
         if not oid:
             return None
-        record["order_id"] = str(oid).strip()
+        record["order_id"] = oid
         record["order_status"] = ent.get("status") or props.get("status")
         record["payment_type"] = props.get("payment_type")
         record["order_date"] = props.get("order_date")
@@ -1325,40 +1998,40 @@ def _normalize_entity_record(ent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         record["scheduled_date"] = props.get("scheduled_date")
         record["actual_date"] = props.get("actual_date")
     elif etype == "Product":
-        pid = ent.get("id")
+        pid = _clean_identifier_field("product_id", ent.get("id"))
         if not pid:
             return None
-        record["product_id"] = str(pid).strip()
+        record["product_id"] = pid
         record["product_sku"] = ent.get("sku") or props.get("sku")
         record["product_name"] = ent.get("name") or props.get("name")
         record["product_desc"] = props.get("desc") or props.get("description")
         record["product_base_price"] = props.get("base_price")
     elif etype == "Category":
-        name = ent.get("name") or props.get("name")
+        name = _clean_text_field("category_name", ent.get("name") or props.get("name"))
         if not name:
             return None
-        record["category_name"] = str(name).strip()
+        record["category_name"] = name
     elif etype == "Department":
-        name = ent.get("name") or props.get("name")
+        name = _clean_text_field("department_name", ent.get("name") or props.get("name"))
         if not name:
             return None
-        record["department_name"] = str(name).strip()
+        record["department_name"] = name
     elif etype == "Supplier":
-        name = ent.get("name") or props.get("name")
+        name = _clean_text_field("supplier_name", ent.get("name") or props.get("name"))
         if not name:
             return None
-        record["supplier_name"] = str(name).strip()
+        record["supplier_name"] = name
         record["supplier_city"] = props.get("city")
     elif etype == "Component":
-        name = ent.get("name") or props.get("name")
+        name = _clean_text_field("component_name", ent.get("name") or props.get("name"))
         if not name:
             return None
-        record["component_name"] = str(name).strip()
+        record["component_name"] = name
     elif etype == "Carrier":
-        name = ent.get("name") or props.get("name")
+        name = _clean_text_field("carrier_name", ent.get("name") or props.get("name"))
         if not name:
             return None
-        record["carrier_name"] = str(name).strip()
+        record["carrier_name"] = name
     else:
         return None
 
@@ -1378,6 +2051,9 @@ def _normalize_relation_record(rel: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     dst_type = NODE_LABEL_ALIASES.get(str(dst.get("type", "")).strip(), str(dst.get("type", "")).strip())
     if not src_type or not dst_type:
         return None
+    expected_schema = RELATION_SCHEMA.get(rtype)
+    if expected_schema and expected_schema != (src_type, dst_type):
+        return None
     row: Dict[str, Any] = {
         "src_type": src_type,
         "dst_type": dst_type,
@@ -1395,13 +2071,23 @@ def _normalize_relation_record(rel: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Normalize types and numeric fields using existing helpers
     row = _normalize_relation_row(row)
     row = _sanitize_row(row)  # reuse numeric coercion for shared keys
+    if not (_node_ref_complete(row, "src") and _node_ref_complete(row, "dst")):
+        return None
     return row
 
 
 def ingest_text_graph(text: str, batch_size: int = 2000, update_mode: str = "safe") -> Dict[str, Any]:
+    prepared_text = _prepare_text_for_extraction(text)
+    text_chunks = _split_long_text_for_llm(
+        prepared_text,
+        max_chars=LONG_TEXT_CHUNK_CHARS,
+        overlap_chars=LONG_TEXT_CHUNK_OVERLAP,
+    )
     graph = _llm_extract_graph(text)
     entities = graph.get("entities") or []
     relations = graph.get("relations") or []
+    raw_entity_count = len([ent for ent in entities if isinstance(ent, dict)])
+    raw_relation_count = len([rel for rel in relations if isinstance(rel, dict)])
 
     entity_records: List[Dict[str, Any]] = []
     for ent in entities:
@@ -1409,6 +2095,8 @@ def ingest_text_graph(text: str, batch_size: int = 2000, update_mode: str = "saf
             rec = _normalize_entity_record(ent)
             if rec:
                 entity_records.append(rec)
+    normalized_entity_count = len(entity_records)
+    entity_records = _merge_sparse_rows(entity_records, _entity_record_key)
 
     relation_records: List[Dict[str, Any]] = []
     for rel in relations:
@@ -1416,6 +2104,8 @@ def ingest_text_graph(text: str, batch_size: int = 2000, update_mode: str = "saf
             rec = _normalize_relation_record(rel)
             if rec:
                 relation_records.append(rec)
+    normalized_relation_count = len(relation_records)
+    relation_records = _merge_sparse_rows(relation_records, _relation_record_key)
 
     total_rows = 0
     total_batches = 0
@@ -1438,7 +2128,91 @@ def ingest_text_graph(text: str, batch_size: int = 2000, update_mode: str = "saf
         total_rows += len(relation_records)
         total_batches += batch_count
 
-    return {"rows": total_rows, "batches": total_batches}
+    return {
+        "rows": total_rows,
+        "batches": total_batches,
+        "text_length": len(prepared_text),
+        "chunk_count": len(text_chunks),
+        "raw_entities": raw_entity_count,
+        "raw_relations": raw_relation_count,
+        "normalized_entities": normalized_entity_count,
+        "normalized_relations": normalized_relation_count,
+        "deduped_entities": len(entity_records),
+        "deduped_relations": len(relation_records),
+    }
+
+
+def preview_relation_csv(path: str, sample_size: int = 20) -> Dict[str, Any]:
+    """Preview relation CSV normalization and validation without writing to Neo4j."""
+    df = _read_csv(path)
+    renamed = _rename_columns(df)
+    prepared = _prepare_relation_records(df)
+    sample_size = max(1, int(sample_size or 20))
+    sample_records = prepared["records"][:sample_size]
+    return {
+        "path": path,
+        "is_relation_csv": _is_relation_csv(renamed),
+        "input_rows": prepared["input_rows"],
+        "valid_rows": prepared["valid_rows"],
+        "skipped_rows": prepared["skipped_rows"],
+        "relation_counts": prepared["relation_counts"],
+        "sample_records": sample_records,
+        "error_examples": prepared["error_examples"],
+    }
+
+
+def preview_text_extraction(
+    text: str,
+    mode: str = "hybrid",
+    text_preview_chars: int = 2000,
+) -> Dict[str, Any]:
+    """Preview extracted data without writing anything to Neo4j."""
+    normalized_mode = (mode or "hybrid").lower()
+    prepared_text = _prepare_text_for_extraction(text)
+    text_preview = prepared_text[: max(0, text_preview_chars)]
+
+    if normalized_mode == "llm_rel":
+        chunks = _split_long_text_for_llm(
+            prepared_text,
+            max_chars=LONG_TEXT_CHUNK_CHARS,
+            overlap_chars=LONG_TEXT_CHUNK_OVERLAP,
+        )
+        chunk_previews = chunks[:3]
+        raw_llm_output = _llm_extract_graph_raw_response(chunks[0] if chunks else prepared_text)
+        return {
+            "mode": normalized_mode,
+            "text_preview": text_preview,
+            "text_length": len(prepared_text),
+            "chunk_count": len(chunks),
+            "chunk_preview_lengths": [len(chunk) for chunk in chunk_previews],
+            "raw_llm_output": raw_llm_output,
+        }
+
+    records = extract_records_from_text(prepared_text, mode=normalized_mode)
+    return {
+        "mode": normalized_mode,
+        "text_preview": text_preview,
+        "text_length": len(prepared_text),
+        "record_count": len(records),
+        "records": records,
+    }
+
+
+def preview_pdf_extraction(
+    path: str,
+    mode: str = "hybrid",
+    text_preview_chars: int = 2000,
+) -> Dict[str, Any]:
+    """Preview PDF extraction without writing anything to Neo4j."""
+    pdf_path = os.path.abspath(path)
+    text = extract_text_from_pdf(pdf_path)
+    result = preview_text_extraction(
+        text=text,
+        mode=mode,
+        text_preview_chars=text_preview_chars,
+    )
+    result["pdf_path"] = pdf_path
+    return result
 
 def ingest_pdf(
     path: str,

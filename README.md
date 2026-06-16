@@ -1,5 +1,11 @@
 # SupplyChainGraph
 
+## API Quick Links
+
+- External API reference: [API_REFERENCE.md](API_REFERENCE.md)
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
+
 面向供应链场景的知识图谱与 GraphRAG 后端服务。项目使用 Neo4j 存储供应链实体与关系，使用 FastAPI 对外提供统一接口，支持自然语言分析、图谱查询、CSV/PDF/文本导入和多类供应链风险分析。
 
 ## 项目定位
@@ -564,4 +570,3 @@ pip install python-multipart
 - 不要提交 `__pycache__/`
 
 如果你当前本地 `.env` 已经放入真实密钥，建议先更换为占位值，并立即轮换真实密钥。
-

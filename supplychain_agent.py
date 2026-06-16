@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from hashlib import sha1
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.prompts import PromptTemplate
@@ -18,7 +20,13 @@ from kg_tools import (
     analyze_key_bottlenecks,
     carrier_delay_performance,
     category_profitability,
+    component_exposure_risk,
+    component_quality_cost_tradeoff,
     compare_supplier_risk,
+    customer_delay_exposure,
+    delay_root_mix,
+    department_exposure_summary,
+    department_supply_fragility,
     delivery_performance_by_ship_mode,
     estimate_delay_loss,
     estimate_supplier_disruption_loss,
@@ -28,18 +36,25 @@ from kg_tools import (
     late_risk_products,
     order_root_cause,
     order_status_summary,
+    on_time_delivery_by_supplier,
     payment_type_risk,
+    profit_at_risk_by_order_stage,
     region_revenue,
+    route_delay_risk,
     segment_financial_exposure,
     set_last_trace,
+    single_source_components,
+    substitute_supplier_candidates,
     supplier_affected_orders,
     supplier_affected_products,
+    supplier_concentration_by_product,
     supplier_ripple_effect,
     supplier_risk_profile,
     suppliers_with_high_defect_rate,
     top_customers_by_revenue,
     top_products_by_profit,
 )
+from rca import RCAEngine
 
 
 def _load_dotenv() -> None:
@@ -88,10 +103,14 @@ ProgressCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 _CACHE_MAX = int(os.getenv("AGENT_CACHE_SIZE", "128"))
 _ANSWER_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _PLAN_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_HOP_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _MAX_HISTORY_CHARS = int(os.getenv("AGENT_MAX_HISTORY_CHARS", "12000"))
 _MAX_TOOL_CHARS = int(os.getenv("AGENT_MAX_TOOL_CHARS", "12000"))
 _MAX_DYNAMIC_ROWS = int(os.getenv("AGENT_MAX_DYNAMIC_ROWS", "80"))
 _MAX_SYNTH_EVIDENCE_CHARS = int(os.getenv("AGENT_MAX_SYNTH_EVIDENCE_CHARS", "18000"))
+_MAX_COMPLEX_HOPS = int(os.getenv("AGENT_MAX_COMPLEX_HOPS", "3"))
+_MAX_HOP_WORKERS = int(os.getenv("AGENT_MAX_HOP_WORKERS", "3"))
+_CACHE_LOCK = Lock()
 
 
 @dataclass
@@ -112,18 +131,20 @@ def _emit_progress(callback: ProgressCallback, event: str, payload: Dict[str, An
 
 
 def _cache_get(cache: "OrderedDict[str, Dict[str, Any]]", key: str) -> Optional[Dict[str, Any]]:
-    value = cache.get(key)
-    if value is None:
-        return None
-    cache.move_to_end(key)
-    return value
+    with _CACHE_LOCK:
+        value = cache.get(key)
+        if value is None:
+            return None
+        cache.move_to_end(key)
+        return value
 
 
 def _cache_set(cache: "OrderedDict[str, Dict[str, Any]]", key: str, value: Dict[str, Any]) -> None:
-    cache[key] = value
-    cache.move_to_end(key)
-    while len(cache) > _CACHE_MAX:
-        cache.popitem(last=False)
+    with _CACHE_LOCK:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > _CACHE_MAX:
+            cache.popitem(last=False)
 
 
 def _cache_key(*parts: str) -> str:
@@ -234,6 +255,8 @@ def _build_tools() -> List[Any]:
         _wrap_tool(supplier_ripple_effect),
         _wrap_tool(supplier_affected_orders),
         _wrap_tool(supplier_affected_products),
+        _wrap_tool(component_exposure_risk),
+        _wrap_tool(single_source_components),
         _wrap_tool(order_root_cause),
         _wrap_tool(analyze_key_bottlenecks),
         _wrap_tool(estimate_delay_loss),
@@ -244,8 +267,18 @@ def _build_tools() -> List[Any]:
         _wrap_tool(carrier_delay_performance),
         _wrap_tool(segment_financial_exposure),
         _wrap_tool(category_profitability),
+        _wrap_tool(department_exposure_summary),
+        _wrap_tool(department_supply_fragility),
         _wrap_tool(compare_supplier_risk),
         _wrap_tool(supplier_risk_profile),
+        _wrap_tool(on_time_delivery_by_supplier),
+        _wrap_tool(delay_root_mix),
+        _wrap_tool(customer_delay_exposure),
+        _wrap_tool(substitute_supplier_candidates),
+        _wrap_tool(supplier_concentration_by_product),
+        _wrap_tool(component_quality_cost_tradeoff),
+        _wrap_tool(route_delay_risk),
+        _wrap_tool(profit_at_risk_by_order_stage),
         _wrap_tool(order_status_summary),
         _wrap_tool(late_risk_products),
         _wrap_tool(late_risk_carrier_modes),
@@ -254,6 +287,18 @@ def _build_tools() -> List[Any]:
         _wrap_tool(delivery_performance_by_ship_mode),
         _build_dynamic_cypher_tool(),
     ]
+
+
+def _build_graphrag_route(engine: str, summary: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    route = {
+        "engine": "graphrag",
+        "route_type": "general",
+        "path": engine,
+        "summary": summary,
+    }
+    if extra:
+        route.update(extra)
+    return route
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
@@ -354,6 +399,80 @@ def _invoke_tool_direct(tool_obj: Any, tool_input: Any) -> str:
     return str(tool_obj(tool_input))
 
 
+def _question_needs_multi_factor_reasoning(question: str) -> bool:
+    q = (question or "").strip()
+    if not q:
+        return False
+    strong_markers = [
+        "同时",
+        "结合",
+        "举例",
+        "并且",
+        "综合",
+        "联动",
+        "多维",
+        "多个维度",
+        "从多个角度",
+        "从不同角度",
+        "延误风险",
+        "利润暴露",
+        "高瓶颈性",
+        "高延误风险",
+        "高利润暴露",
+    ]
+    if any(marker in q for marker in strong_markers):
+        return True
+    dimension_hits = sum(
+        1
+        for marker in ["瓶颈", "延误", "利润", "暴露", "订单", "产品", "节点", "供应链", "风险"]
+        if marker in q
+    )
+    return dimension_hits >= 4
+
+
+def _question_requests_examples(question: str) -> bool:
+    q = (question or "").strip()
+    if not q:
+        return False
+    return any(marker in q for marker in ["举例", "例如", "比如", "样例", "案例"])
+
+
+def _tool_output_is_insufficient(tool_output: str) -> bool:
+    text = (tool_output or "").strip()
+    if not text:
+        return True
+
+    lowered = text.lower()
+    no_data_markers = [
+        "no data",
+        "not found",
+        "no root-cause path",
+        "no bottleneck results",
+        "no supplier comparison data",
+        "missing order id",
+        "missing supplier",
+    ]
+    if any(marker in lowered for marker in no_data_markers):
+        return True
+    if re.match(r"^no\b", lowered):
+        return True
+
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+
+    if isinstance(parsed, list) and not parsed:
+        return True
+    if isinstance(parsed, dict):
+        if "rows" in parsed and not parsed.get("rows"):
+            return True
+        if "data" in parsed and not parsed.get("data"):
+            return True
+
+    return False
+
+
 def _fast_route_question(question: str) -> Optional[_FastRoute]:
     q = (question or "").strip()
     ql = q.lower()
@@ -362,6 +481,11 @@ def _fast_route_question(question: str) -> Optional[_FastRoute]:
     supplier_names = _extract_supplier_names(q)
     top_k = _extract_int_value(q, default=5)
     delay_days = _extract_int_value(q, default=3)
+
+    # Composite questions usually need multi-hop evidence synthesis instead of
+    # a single fixed tool response.
+    if _question_needs_multi_factor_reasoning(q):
+        return None
 
     if len(supplier_names) >= 2 and any(key in q for key in ["对比", "比较", "谁影响", "谁的金额", "谁更大"]):
         return _FastRoute(
@@ -425,6 +549,8 @@ def _fast_route_question(question: str) -> Optional[_FastRoute]:
         )
 
     if any(key in q for key in ["瓶颈", "关键供应商"]) or "bottleneck" in ql:
+        if _question_needs_multi_factor_reasoning(q):
+            return None
         scenario = "finance" if "finance" in ql or "财务" in q else "production" if "production" in ql or "生产" in q else "general"
         return _FastRoute(
             name="analyze_key_bottlenecks",
@@ -450,9 +576,29 @@ def _plan_question(question: str, history_text: str) -> Dict[str, Any]:
     if cached is not None:
         return dict(cached)
 
+    composite_guidance = ""
+    if _question_needs_multi_factor_reasoning(question):
+        composite_guidance = """
+Composite-question rules:
+- If the user asks for multiple dimensions at once, allocate separate sub_questions for each dimension.
+- Cover every requested constraint explicitly instead of collapsing them into one vague hop.
+- When the user combines graph structure, delay risk, and financial exposure, plan at least one hop for each evidence type.
+"""
+    example_guidance = ""
+    if _question_requests_examples(question):
+        example_guidance = """
+Example rules:
+- If the user asks for examples, include one sub_question that retrieves representative orders and products as concrete evidence.
+- The final hop may focus on finding the best supporting examples rather than only summary statistics.
+"""
+
     planner_prompt = f"""You are a GraphRAG planner for supply-chain analysis.
-Break the user question into 1-4 retrieval hops that can be answered from a knowledge graph.
-Important language rule:
+Break the user question into 1-{_MAX_COMPLEX_HOPS} retrieval hops that can be answered from a knowledge graph.
+Latency rules:
+- Prefer fewer, broader hops over many narrow hops.
+- Avoid redundant or overlapping sub_questions.
+- Only create an extra hop when it adds unique evidence needed for the final answer.
+{composite_guidance}{example_guidance}Important language rule:
 - sub_questions must always be written in Simplified Chinese.
 - reasoning_path must always be written in Simplified Chinese.
 - focus_entities should prefer Chinese labels when possible.
@@ -488,8 +634,9 @@ User question:
                 continue
             if not re.search(r"[\u4e00-\u9fff]", text):
                 text = f"请用中文回答并检索：{text}"
-            normalized_sub_questions.append(text)
-        plan["sub_questions"] = normalized_sub_questions[:4]
+            if text not in normalized_sub_questions:
+                normalized_sub_questions.append(text)
+        plan["sub_questions"] = normalized_sub_questions[:_MAX_COMPLEX_HOPS]
         if not plan["sub_questions"]:
             plan["sub_questions"] = [f"请用知识图谱回答这个问题：{question}"]
     reasoning_path = plan.get("reasoning_path")
@@ -502,7 +649,7 @@ User question:
             if not re.search(r"[\u4e00-\u9fff]", text):
                 text = f"中文推理说明：{text}"
             normalized_reasoning.append(text)
-        plan["reasoning_path"] = normalized_reasoning[:4]
+        plan["reasoning_path"] = normalized_reasoning[:_MAX_COMPLEX_HOPS]
     elif reasoning_path:
         text = str(reasoning_path).strip()
         plan["reasoning_path"] = [text if re.search(r"[\u4e00-\u9fff]", text) else f"中文推理说明：{text}"]
@@ -519,6 +666,31 @@ def _retrieve_one_hop(
     hop_index: int,
     hop_total: int,
 ) -> Dict[str, Any]:
+    cache_key = _cache_key("hop", question, sub_question)
+    cached = _cache_get(_HOP_CACHE, cache_key)
+    if cached is not None:
+        return dict(cached)
+
+    fast_route = _fast_route_question(sub_question)
+    if fast_route is not None:
+        tool_output = _invoke_tool_direct(fast_route.tool, fast_route.tool_input)
+        if not _tool_output_is_insufficient(tool_output):
+            result = {
+                "sub_question": sub_question,
+                "evidence": _truncate_text(tool_output, _MAX_TOOL_CHARS, label="hop evidence"),
+                "tool_trace": get_last_trace()
+                or {
+                    "tool": getattr(fast_route.tool, "name", fast_route.name),
+                    "type": "direct",
+                },
+            }
+            _cache_set(_HOP_CACHE, cache_key, dict(result))
+            return result
+        logger.info(
+            "Direct hop tool %s returned insufficient output; fallback to retriever",
+            getattr(fast_route.tool, "name", fast_route.name),
+        )
+
     retrieval_system = """You are a graph retrieval specialist.
 Goal: answer the sub-question with concrete graph evidence.
 Requirements:
@@ -538,9 +710,19 @@ Return concise factual findings for this hop only.
     result = retriever.invoke(
         {"messages": [("system", retrieval_system), ("user", retrieval_user)]}
     )
-    hop_text = result["messages"][-1].content
+    hop_text = _truncate_text(
+        result["messages"][-1].content,
+        _MAX_TOOL_CHARS,
+        label="hop evidence",
+    )
     trace_snapshot = get_last_trace()
-    return {"sub_question": sub_question, "evidence": hop_text, "tool_trace": trace_snapshot}
+    payload = {
+        "sub_question": sub_question,
+        "evidence": hop_text,
+        "tool_trace": trace_snapshot,
+    }
+    _cache_set(_HOP_CACHE, cache_key, dict(payload))
+    return payload
 
 
 def _content_to_text(content: Any) -> str:
@@ -675,6 +857,86 @@ def _sanitize_text_output(text: str) -> str:
     return cleaned.strip()
 
 
+def _run_parallel_hops(
+    retriever: Any,
+    question: str,
+    sub_questions: List[str],
+    progress_callback: ProgressCallback = None,
+    request_id: str = "",
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    if not sub_questions:
+        return [], []
+
+    total = len(sub_questions)
+    hop_results: List[Optional[Dict[str, Any]]] = [None] * total
+    progress_log: List[str] = []
+
+    max_workers = max(1, min(_MAX_HOP_WORKERS, total))
+    if total == 1:
+        result = _retrieve_one_hop(
+            retriever,
+            question=question,
+            sub_question=sub_questions[0],
+            hop_index=1,
+            hop_total=1,
+        )
+        hop_results[0] = result
+        tool_name = (result.get("tool_trace") or {}).get("tool", "unknown")
+        progress_log.append(f"hop 1/1: tool={tool_name}")
+        return [result], progress_log
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {}
+        for idx, sub_q in enumerate(sub_questions, start=1):
+            _emit_progress(
+                progress_callback,
+                "status",
+                {
+                    "request_id": request_id,
+                    "stage": "retrieval",
+                    "message": f"Retrieving hop {idx}/{total}",
+                    "sub_question": sub_q,
+                },
+            )
+            future = executor.submit(
+                _retrieve_one_hop,
+                retriever,
+                question,
+                sub_q,
+                idx,
+                total,
+            )
+            future_to_index[future] = idx - 1
+
+        for future in as_completed(future_to_index):
+            idx = future_to_index[future]
+            sub_q = sub_questions[idx]
+            try:
+                result = future.result()
+            except Exception as exc:
+                logger.exception("Parallel hop failed; falling back to error payload")
+                result = {
+                    "sub_question": sub_q,
+                    "evidence": f"Hop retrieval failed: {exc}",
+                    "tool_trace": {"tool": "parallel_hop", "type": "error"},
+                }
+            hop_results[idx] = result
+            tool_name = (result.get("tool_trace") or {}).get("tool", "unknown")
+            progress_log.append(f"hop {idx + 1}/{total}: tool={tool_name}")
+            _emit_progress(
+                progress_callback,
+                "status",
+                {
+                    "request_id": request_id,
+                    "stage": "retrieval",
+                    "message": f"Completed hop {idx + 1}/{total}: {tool_name}",
+                    "sub_question": sub_q,
+                },
+            )
+
+    return [item for item in hop_results if item is not None], progress_log
+
+
 @dataclass
 class _AssistantMessage:
     content: str
@@ -684,6 +946,7 @@ class GraphRAGAgentExecutor:
     def __init__(self, base_llm: ChatOpenAI):
         self.base_llm = base_llm
         self.retriever = create_react_agent(base_llm, _build_tools())
+        self.rca_engine = RCAEngine(base_llm)
 
     def invoke(
         self, payload: Dict[str, Any], progress_callback: ProgressCallback = None
@@ -727,7 +990,59 @@ class GraphRAGAgentExecutor:
                 "status",
                 {"request_id": request_id, "stage": "cache", "message": "命中缓存，直接返回结果"},
             )
-            return {"messages": [_AssistantMessage(content=cached_answer["reply"])]}
+            return {
+                "messages": [_AssistantMessage(content=cached_answer["reply"])],
+                "trace": trace,
+                "rca": cached_answer.get("rca"),
+            }
+
+        rca_intent = self.rca_engine.detect_intent(question, history_text=history_text)
+        if rca_intent.route_type == "rca":
+            logger.info(
+                "[req:%s] rca route subtype=%s target=%s",
+                request_id,
+                rca_intent.subtype,
+                rca_intent.target_id,
+            )
+            progress_log.append(
+                f"routing: rca -> {rca_intent.subtype} ({rca_intent.target_type}:{rca_intent.target_id})"
+            )
+            _emit_progress(
+                progress_callback,
+                "status",
+                {
+                    "request_id": request_id,
+                    "stage": "routing",
+                    "message": f"识别为 RCA 问题，切换到 {rca_intent.subtype} 专用分析链路",
+                },
+            )
+            rca_start = time.perf_counter()
+            rca_result = self.rca_engine.run(
+                question,
+                history_text=history_text,
+                progress_callback=progress_callback,
+                intent=rca_intent,
+            )
+            if rca_result.get("handled"):
+                rca_ms = int((time.perf_counter() - rca_start) * 1000)
+                total_ms = int((time.perf_counter() - req_start) * 1000)
+                progress_log.append(f"rca: {rca_ms} ms")
+                progress_log.append(f"done: total {total_ms} ms")
+                trace = dict(rca_result.get("trace") or {})
+                trace["request_id"] = request_id
+                trace["progress_log"] = progress_log
+                set_last_trace(trace)
+                final_answer = rca_result.get("reply", "")
+                _cache_set(
+                    _ANSWER_CACHE,
+                    answer_cache_key,
+                    {"reply": final_answer, "trace": trace, "rca": rca_result.get("rca")},
+                )
+                return {
+                    "messages": [_AssistantMessage(content=final_answer)],
+                    "trace": trace,
+                    "rca": rca_result.get("rca"),
+                }
 
         fast_route = _fast_route_question(question)
         if fast_route is not None:
@@ -747,55 +1062,84 @@ class GraphRAGAgentExecutor:
             tool_ms = int((time.perf_counter() - tool_start) * 1000)
             tool_name = getattr(fast_route.tool, "name", fast_route.name)
             progress_log.append(f"tool: {tool_name}, {tool_ms} ms")
-            _emit_progress(
-                progress_callback,
-                "status",
-                {
-                    "request_id": request_id,
-                    "stage": "tool",
-                    "message": f"已完成核心查询：{tool_name}",
-                },
-            )
-
-            synth_start = time.perf_counter()
-            final_answer = _synthesize_direct_answer(
-                question, history_text, fast_route, tool_output, progress_callback
-            )
-            synth_ms = int((time.perf_counter() - synth_start) * 1000)
-            total_ms = int((time.perf_counter() - req_start) * 1000)
-            progress_log.append(f"synthesis: {synth_ms} ms")
-            progress_log.append(f"done: total {total_ms} ms")
-            trace = {
-                "tool": "GraphRAG_Orchestrator",
-                "type": "pipeline",
-                "request_id": request_id,
-                "progress_log": progress_log,
-                "plan": {"intent": "fast-route", "sub_questions": [question]},
-                "hops": [
+            if not _tool_output_is_insufficient(tool_output):
+                _emit_progress(
+                    progress_callback,
+                    "status",
                     {
-                        "hop": 1,
-                        "sub_question": question,
-                        "tool_trace": get_last_trace()
-                        or {"tool": tool_name, "type": "direct"},
-                    }
-                ],
-            }
-            set_last_trace(trace)
-            _cache_set(
-                _ANSWER_CACHE,
-                answer_cache_key,
-                {"reply": final_answer, "trace": trace},
+                        "request_id": request_id,
+                        "stage": "tool",
+                        "message": f"已完成核心查询：{tool_name}",
+                    },
+                )
+
+                synth_start = time.perf_counter()
+                final_answer = _synthesize_direct_answer(
+                    question, history_text, fast_route, tool_output, progress_callback
+                )
+                synth_ms = int((time.perf_counter() - synth_start) * 1000)
+                total_ms = int((time.perf_counter() - req_start) * 1000)
+                progress_log.append(f"synthesis: {synth_ms} ms")
+                progress_log.append(f"done: total {total_ms} ms")
+                trace = {
+                    "tool": "GraphRAG_Orchestrator",
+                    "engine": "graphrag",
+                    "type": "pipeline",
+                    "mode": "graphrag",
+                    "route": _build_graphrag_route(
+                        "fast-route",
+                        f"GraphRAG -> fast-route ({tool_name})",
+                        {"tool_name": tool_name},
+                    ),
+                    "route_summary": f"GraphRAG -> fast-route ({tool_name})",
+                    "request_id": request_id,
+                    "progress_log": progress_log,
+                    "plan": {"intent": "fast-route", "sub_questions": [question]},
+                    "hops": [
+                        {
+                            "hop": 1,
+                            "sub_question": question,
+                            "tool_trace": get_last_trace()
+                            or {"tool": tool_name, "type": "direct"},
+                        }
+                    ],
+                }
+                set_last_trace(trace)
+                _cache_set(
+                    _ANSWER_CACHE,
+                    answer_cache_key,
+                    {"reply": final_answer, "trace": trace},
+                )
+                _emit_progress(
+                    progress_callback,
+                    "status",
+                    {
+                        "request_id": request_id,
+                        "stage": "synthesis",
+                        "message": "已生成最终回答",
+                    },
+                )
+                return {
+                    "messages": [_AssistantMessage(content=final_answer)],
+                    "trace": trace,
+                    "rca": None,
+                }
+
+            logger.info(
+                "[req:%s] fast route=%s returned insufficient output; fallback to full pipeline",
+                request_id,
+                fast_route.name,
             )
+            progress_log.append(f"fallback: {tool_name} insufficient, switch to planner")
             _emit_progress(
                 progress_callback,
                 "status",
                 {
                     "request_id": request_id,
-                    "stage": "synthesis",
-                    "message": "已生成最终回答",
+                    "stage": "routing",
+                    "message": "固定查询结果不足，回退到动态推理与LLM检索链路",
                 },
             )
-            return {"messages": [_AssistantMessage(content=final_answer)]}
 
         plan_start = time.perf_counter()
         _emit_progress(
@@ -804,7 +1148,7 @@ class GraphRAGAgentExecutor:
             {"request_id": request_id, "stage": "planning", "message": "正在拆解问题并规划检索路径"},
         )
         plan = _plan_question(question, history_text)
-        sub_questions = plan.get("sub_questions", [question])[:4]
+        sub_questions = plan.get("sub_questions", [question])[:_MAX_COMPLEX_HOPS]
         plan_ms = int((time.perf_counter() - plan_start) * 1000)
         logger.info(
             "[req:%s] planning done hops=%s cost_ms=%s",
@@ -823,54 +1167,26 @@ class GraphRAGAgentExecutor:
             },
         )
 
-        hop_results: List[Dict[str, Any]] = []
-        for i, sub_q in enumerate(sub_questions, start=1):
-            hop_start = time.perf_counter()
-            logger.info(
-                "[req:%s] hop %s/%s start sub_question=%s",
-                request_id,
-                i,
-                len(sub_questions),
-                str(sub_q).replace("\n", " ")[:120],
-            )
-            _emit_progress(
-                progress_callback,
-                "status",
-                {
-                    "request_id": request_id,
-                    "stage": "retrieval",
-                    "message": f"正在检索第 {i}/{len(sub_questions)} 跳",
-                    "sub_question": sub_q,
-                },
-            )
-            hop_results.append(
-                _retrieve_one_hop(
-                    self.retriever, question=question, sub_question=sub_q, hop_index=i, hop_total=len(sub_questions)
-                )
-            )
-            hop_ms = int((time.perf_counter() - hop_start) * 1000)
-            hop_trace = hop_results[-1].get("tool_trace") or {}
+        retrieval_start = time.perf_counter()
+        hop_results, hop_progress = _run_parallel_hops(
+            self.retriever,
+            question=question,
+            sub_questions=sub_questions,
+            progress_callback=progress_callback,
+            request_id=request_id,
+        )
+        retrieval_ms = int((time.perf_counter() - retrieval_start) * 1000)
+        progress_log.append(f"retrieval: {len(hop_results)} hops in {retrieval_ms} ms")
+        progress_log.extend(hop_progress)
+        for i, item in enumerate(hop_results, start=1):
+            hop_trace = item.get("tool_trace") or {}
             tool_name = hop_trace.get("tool", "unknown")
             logger.info(
-                "[req:%s] hop %s/%s done tool=%s cost_ms=%s",
+                "[req:%s] hop %s/%s done tool=%s",
                 request_id,
                 i,
-                len(sub_questions),
+                len(hop_results),
                 tool_name,
-                hop_ms,
-            )
-            progress_log.append(
-                f"hop {i}/{len(sub_questions)}: tool={tool_name}, {hop_ms} ms"
-            )
-            _emit_progress(
-                progress_callback,
-                "status",
-                {
-                    "request_id": request_id,
-                    "stage": "retrieval",
-                    "message": f"第 {i}/{len(sub_questions)} 跳完成：{tool_name}",
-                    "sub_question": sub_q,
-                },
             )
 
         synth_start = time.perf_counter()
@@ -898,29 +1214,40 @@ class GraphRAGAgentExecutor:
         progress_log.append(f"synthesis: {synth_ms} ms")
         progress_log.append(f"done: total {total_ms} ms")
 
-        set_last_trace(
-            {
-                "tool": "GraphRAG_Orchestrator",
-                "type": "pipeline",
-                "request_id": request_id,
-                "progress_log": progress_log,
-                "plan": plan,
-                "hops": [
-                    {
-                        "hop": idx + 1,
-                        "sub_question": item["sub_question"],
-                        "tool_trace": item.get("tool_trace"),
-                    }
-                    for idx, item in enumerate(hop_results)
-                ],
-            }
-        )
+        trace = {
+            "tool": "GraphRAG_Orchestrator",
+            "engine": "graphrag",
+            "type": "pipeline",
+            "mode": "graphrag",
+            "route": _build_graphrag_route(
+                "multi-hop",
+                f"GraphRAG -> multi-hop ({len(hop_results)} hops)",
+                {"hop_count": len(hop_results)},
+            ),
+            "route_summary": f"GraphRAG -> multi-hop ({len(hop_results)} hops)",
+            "request_id": request_id,
+            "progress_log": progress_log,
+            "plan": plan,
+            "hops": [
+                {
+                    "hop": idx + 1,
+                    "sub_question": item["sub_question"],
+                    "tool_trace": item.get("tool_trace"),
+                }
+                for idx, item in enumerate(hop_results)
+            ],
+        }
+        set_last_trace(trace)
         _cache_set(
             _ANSWER_CACHE,
             answer_cache_key,
-            {"reply": final_answer, "trace": get_last_trace() or {}},
+            {"reply": final_answer, "trace": trace},
         )
-        return {"messages": [_AssistantMessage(content=final_answer)]}
+        return {
+            "messages": [_AssistantMessage(content=final_answer)],
+            "trace": trace,
+            "rca": None,
+        }
 
 
 SYSTEM_PROMPT = """You are a supply-chain GraphRAG assistant.

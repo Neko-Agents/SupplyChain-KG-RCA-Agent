@@ -47,17 +47,17 @@
             box-shadow: 0 20px 60px var(--shadow);
             border: 1px solid var(--border);
             display: grid;
-            grid-template-columns: 300px 1fr;
+            grid-template-columns: 248px 1fr;
             overflow: hidden;
         }
 
         .side {
-            padding: 22px;
+            padding: 18px 16px;
             background: linear-gradient(160deg, #fff7ea 0%, #fff 40%);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 14px;
             overflow-y: auto;
         }
 
@@ -155,7 +155,7 @@
             flex: 1;
             min-height: 0;
             display: grid;
-            grid-template-columns: 1.15fr 0.85fr;
+            grid-template-columns: minmax(0, 0.96fr) minmax(460px, 1.04fr);
             height: 100%;
         }
 
@@ -165,10 +165,12 @@
             display: flex;
             flex-direction: column;
             border-right: 1px solid var(--border);
+            background:
+                linear-gradient(180deg, rgba(255, 250, 244, 0.72) 0%, rgba(255, 255, 255, 0.92) 18%, #fff 100%);
         }
 
         .trace {
-            padding: 10px 12px 12px;
+            padding: 10px 10px 10px;
             background: linear-gradient(180deg, #fffdf9, #fff6eb);
             border: 1px solid var(--border);
             border-radius: 14px;
@@ -212,8 +214,8 @@
             border: 1px solid var(--border);
             border-radius: 10px;
             background: #fff;
-            padding: 10px 10px 8px;
-            min-height: 140px;
+            padding: 9px 9px 7px;
+            min-height: 104px;
             display: flex;
             flex-direction: column;
         }
@@ -230,7 +232,7 @@
             color: var(--ink);
             font-size: 0.8rem;
             line-height: 1.45;
-            max-height: 150px;
+            max-height: 92px;
             overflow-y: auto;
         }
 
@@ -248,7 +250,7 @@
         .chat {
             height: 100%;
             min-height: 0;
-            padding: 18px;
+            padding: 18px 20px 16px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
@@ -262,7 +264,7 @@
         .chat::-webkit-scrollbar-thumb { background: #d1c3b2; border-radius: 999px; }
 
         .msg {
-            max-width: 86%;
+            max-width: 92%;
             padding: 12px 14px;
             border-radius: 14px;
             line-height: 1.6;
@@ -332,8 +334,8 @@
         .graph-panel {
             height: 100%;
             min-height: 0;
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-rows: auto auto auto minmax(320px, 1.12fr) minmax(260px, 0.88fr);
             background: linear-gradient(180deg, #fff, #fffdf9);
         }
 
@@ -374,6 +376,11 @@
             border-color: var(--brand-2);
         }
 
+        .viz-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
         .viz-meta {
             font-size: 0.8rem;
             color: var(--muted);
@@ -383,11 +390,261 @@
 
         .viz-summary {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .viz-rca {
+            padding: 0;
+            background:
+                radial-gradient(400px 160px at 0% 0%, rgba(195, 82, 47, 0.09) 0%, transparent 70%),
+                linear-gradient(180deg, #fff8f1 0%, #fff 100%);
+        }
+
+        .viz-rca-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .viz-rca-title {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .viz-rca-subtitle {
+            margin-top: 4px;
+            font-size: 0.78rem;
+            color: var(--muted);
+        }
+
+        .severity-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 86px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: #fff;
+            background: #8a7e70;
+        }
+
+        .severity-badge.low { background: #6b7a89; }
+        .severity-badge.medium { background: #c58a2d; }
+        .severity-badge.high { background: #c3522f; }
+        .severity-badge.critical { background: #8b2222; }
+
+        .rca-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .rca-metric {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.92);
+            padding: 10px 12px;
+        }
+
+        .rca-metric-label {
+            font-size: 0.72rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .rca-metric-value {
+            margin-top: 6px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--ink);
+            line-height: 1.35;
+        }
+
+        .rca-lists {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border);
-            background: linear-gradient(180deg, #fffaf4 0%, #fff 100%);
+            margin-top: 10px;
+        }
+
+        .rca-list-card.wide {
+            grid-column: 1 / -1;
+        }
+
+        .rca-list-card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: #fff;
+            padding: 10px 12px;
+        }
+
+        .rca-list-title {
+            margin: 0 0 8px;
+            font-size: 0.8rem;
+            color: var(--brand);
+            font-weight: 700;
+        }
+
+        .rca-list {
+            margin: 0;
+            padding-left: 18px;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            color: var(--ink);
+        }
+
+        .rca-list li + li {
+            margin-top: 6px;
+        }
+
+        .rca-list small {
+            display: block;
+            margin-top: 4px;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .rca-list.interactive {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .rca-cause-item {
+            border: 1px solid transparent;
+            border-radius: 10px;
+            padding: 8px 10px;
+            cursor: pointer;
+            transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+        }
+
+        .rca-cause-item:hover {
+            border-color: rgba(195, 82, 47, 0.3);
+            background: #fff8f2;
+            transform: translateY(-1px);
+        }
+
+        .rca-cause-item.active {
+            border-color: rgba(195, 82, 47, 0.45);
+            background: linear-gradient(180deg, #fff7ef 0%, #fff 100%);
+            box-shadow: inset 0 0 0 1px rgba(195, 82, 47, 0.08);
+        }
+
+        .rca-cause-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-weight: 700;
+        }
+
+        .rca-cause-score {
+            color: var(--brand);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .rca-detail-card {
+            background:
+                radial-gradient(360px 180px at 0% 0%, rgba(46, 107, 95, 0.08) 0%, transparent 70%),
+                linear-gradient(180deg, #fff 0%, #fffcf7 100%);
+        }
+
+        .rca-detail-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .rca-detail-subtitle {
+            margin-top: 4px;
+            font-size: 0.78rem;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .rca-detail-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 86px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: #fff;
+            background: #8a7e70;
+        }
+
+        .rca-detail-badge.direct {
+            background: var(--brand-2);
+        }
+
+        .rca-detail-badge.structural {
+            background: #8a7e70;
+        }
+
+        .rca-detail-summary {
+            border: 1px dashed var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: rgba(255, 255, 255, 0.88);
+            font-size: 0.82rem;
+            line-height: 1.55;
+            color: var(--ink);
+        }
+
+        .rca-detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .rca-detail-block {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.96);
+            padding: 10px 12px;
+        }
+
+        .rca-detail-block.wide {
+            grid-column: 1 / -1;
+        }
+
+        .rca-detail-label {
+            margin: 0 0 8px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--brand);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .rca-flat-list {
+            margin: 0;
+            padding-left: 18px;
+            font-size: 0.79rem;
+            line-height: 1.5;
+            color: var(--ink);
+        }
+
+        .rca-flat-list li + li {
+            margin-top: 6px;
+        }
+
+        .rca-flat-list small {
+            display: block;
+            margin-top: 4px;
+            color: var(--muted);
         }
 
         .viz-card {
@@ -447,16 +704,33 @@
         }
 
         .graph-canvas {
-            flex: 1;
             min-height: 0;
             background: radial-gradient(900px 400px at 10% 0%, #fff9ef 0%, transparent 55%), #fff;
         }
 
-        .node-info {
+        .insight-stage {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1.02fr) minmax(260px, 0.98fr);
             border-top: 1px solid var(--border);
+            background: linear-gradient(180deg, #fffaf4 0%, #fff 16%, #fff 100%);
+        }
+
+        .insight-stack {
+            min-height: 0;
+            overflow-y: auto;
             padding: 12px 14px 14px;
-            min-height: 150px;
-            max-height: 220px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .node-info {
+            border-top: none;
+            border-left: 1px solid var(--border);
+            padding: 12px 14px 14px;
+            min-height: 0;
+            max-height: none;
             overflow-y: auto;
             background: #fffefb;
         }
@@ -526,8 +800,18 @@
         }
 
         @media (max-width: 1200px) {
-            .workspace { grid-template-columns: 1fr 1fr; }
+            .frame { grid-template-columns: 226px 1fr; }
+            .workspace { grid-template-columns: minmax(0, 1fr) minmax(420px, 0.98fr); }
             .viz-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .rca-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .rca-lists { grid-template-columns: 1fr; }
+            .rca-detail-grid { grid-template-columns: 1fr; }
+            .insight-stage { grid-template-columns: 1fr; }
+            .node-info {
+                border-left: none;
+                border-top: 1px solid var(--border);
+                max-height: 240px;
+            }
         }
 
         @media (max-width: 980px) {
@@ -544,14 +828,25 @@
             .side { display: none; }
             .workspace {
                 grid-template-columns: 1fr;
-                grid-template-rows: 56% 44%;
+                grid-template-rows: 52% 48%;
             }
             .qa-panel {
                 border-right: none;
                 border-bottom: 1px solid var(--border);
             }
             .trace { display: none !important; }
+            .graph-panel {
+                grid-template-rows: auto auto auto minmax(260px, 0.95fr) minmax(240px, 1fr);
+            }
             .viz-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .rca-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .rca-lists { grid-template-columns: 1fr; }
+            .rca-detail-grid { grid-template-columns: 1fr; }
+            .insight-stage { grid-template-columns: 1fr; }
+            .node-info {
+                border-left: none;
+                border-top: 1px solid var(--border);
+            }
             .detail-grid { grid-template-columns: 1fr; }
         }
     </style>
@@ -584,7 +879,7 @@
                     <ol class="trace-list" id="progressList"></ol>
                 </div>
                 <div class="trace-block">
-                    <h4>Hop Tools</h4>
+                    <h4 id="secondaryTraceTitle">Hop Tools</h4>
                     <ol class="trace-list" id="hopList"></ol>
                 </div>
             </div>
@@ -621,42 +916,132 @@
                     <div class="viz-title">Graph View</div>
                     <div class="viz-actions">
                         <button class="viz-btn active" id="focusGraphBtn">Focus Graph</button>
+                        <button class="viz-btn" id="rcaGraphBtn" disabled>RCA Evidence</button>
                         <button class="viz-btn" id="fullGraphBtn">Full Graph</button>
                     </div>
                 </div>
                 <div class="viz-meta" id="vizMeta">Graph not loaded.</div>
-                <div class="viz-summary">
-                    <div class="viz-card">
-                        <div class="viz-card-label">节点数</div>
-                        <div class="viz-card-value" id="metricNodes">-</div>
-                    </div>
-                    <div class="viz-card">
-                        <div class="viz-card-label">关系数</div>
-                        <div class="viz-card-value" id="metricEdges">-</div>
-                    </div>
-                    <div class="viz-card">
-                        <div class="viz-card-label">当前模式</div>
-                        <div class="viz-card-value" id="metricMode">未加载</div>
-                    </div>
-                    <div class="viz-card">
-                        <div class="viz-card-label">展示说明</div>
-                        <div class="viz-card-value" id="metricHint">等待问题</div>
-                    </div>
-                </div>
                 <div class="graph-legend" id="graphLegend">
-                    节点颜色代表实体类型，节点越大说明连接越多。单击节点看实体详情，单击边查看关系方向。
+                    节点颜色代表实体类型，节点越大说明连接越多。虚线边表示 RCA 事件层的虚拟关系；深红节点是事件中心，金色描边通常是当前分析目标。
                     <div class="legend-pills" id="legendPills"></div>
                 </div>
                 <div class="graph-canvas" id="graphCanvas"></div>
-                <div class="node-info" id="nodeInfo">
-                    <div class="node-info-head">
-                        <div>
-                            <div class="node-info-title" id="nodeInfoTitle">详情面板</div>
-                            <div class="node-info-subtitle" id="nodeInfoSubtitle">点击节点或关系后，这里会显示结构化信息。</div>
+                <div class="insight-stage">
+                    <div class="insight-stack">
+                        <div class="viz-summary">
+                            <div class="viz-card">
+                                <div class="viz-card-label">节点数</div>
+                                <div class="viz-card-value" id="metricNodes">-</div>
+                            </div>
+                            <div class="viz-card">
+                                <div class="viz-card-label">关系数</div>
+                                <div class="viz-card-value" id="metricEdges">-</div>
+                            </div>
+                            <div class="viz-card">
+                                <div class="viz-card-label">当前模式</div>
+                                <div class="viz-card-value" id="metricMode">未加载</div>
+                            </div>
+                            <div class="viz-card">
+                                <div class="viz-card-label">展示说明</div>
+                                <div class="viz-card-value" id="metricHint">等待问题</div>
+                            </div>
                         </div>
-                        <div class="node-info-badge" id="nodeInfoBadge" style="background:#8a7e70;">等待选择</div>
+                        <div class="viz-rca" id="rcaPanel" style="display:none;">
+                            <div class="viz-rca-head">
+                                <div>
+                                    <div class="viz-rca-title" id="rcaTitle">RCA Overview</div>
+                                    <div class="viz-rca-subtitle" id="rcaSubtitle">根因分析结果将显示在这里。</div>
+                                </div>
+                                <div class="severity-badge" id="rcaSeverity">未激活</div>
+                            </div>
+                            <div class="rca-metrics">
+                                <div class="rca-metric">
+                                    <div class="rca-metric-label">Top Cause</div>
+                                    <div class="rca-metric-value" id="rcaTopCause">-</div>
+                                </div>
+                                <div class="rca-metric">
+                                    <div class="rca-metric-label">Target</div>
+                                    <div class="rca-metric-value" id="rcaTarget">-</div>
+                                </div>
+                                <div class="rca-metric">
+                                    <div class="rca-metric-label">Risk Signals</div>
+                                    <div class="rca-metric-value" id="rcaSignalCount">0</div>
+                                </div>
+                                <div class="rca-metric">
+                                    <div class="rca-metric-label">Actions</div>
+                                    <div class="rca-metric-value" id="rcaActionCount">0</div>
+                                </div>
+                                <div class="rca-metric">
+                                    <div class="rca-metric-label">Exposure</div>
+                                    <div class="rca-metric-value" id="rcaExposure">-</div>
+                                </div>
+                                <div class="rca-metric">
+                                    <div class="rca-metric-label">Graph Span</div>
+                                    <div class="rca-metric-value" id="rcaGraphSpan">-</div>
+                                </div>
+                            </div>
+                            <div class="rca-lists">
+                                <div class="rca-list-card wide">
+                                    <h4 class="rca-list-title">Investigation Trail</h4>
+                                    <ol class="rca-list" id="rcaInvestigationList"></ol>
+                                </div>
+                                <div class="rca-list-card wide">
+                                    <h4 class="rca-list-title">Top Causes</h4>
+                                    <ol class="rca-list interactive" id="rcaCauseList"></ol>
+                                </div>
+                                <div class="rca-list-card wide rca-detail-card">
+                                    <div class="rca-detail-head">
+                                        <div>
+                                            <h4 class="rca-list-title">Why This Cause</h4>
+                                            <div class="rca-detail-subtitle" id="rcaCauseDetailTitle">选择一个根因候选后，这里会展示证据链、支撑节点和溯源记录。</div>
+                                        </div>
+                                        <div class="rca-detail-badge structural" id="rcaCauseDetailMode">未选择</div>
+                                    </div>
+                                    <div class="rca-detail-summary" id="rcaCauseDetailSummary">当前没有可展示的根因细节。</div>
+                                    <div class="rca-detail-grid">
+                                        <div class="rca-detail-block">
+                                            <div class="rca-detail-label">Evidence Notes</div>
+                                            <ul class="rca-flat-list" id="rcaCauseEvidenceList"></ul>
+                                        </div>
+                                        <div class="rca-detail-block">
+                                            <div class="rca-detail-label">Supporting Nodes</div>
+                                            <ul class="rca-flat-list" id="rcaCauseNodeList"></ul>
+                                        </div>
+                                        <div class="rca-detail-block">
+                                            <div class="rca-detail-label">Supporting Edges</div>
+                                            <ul class="rca-flat-list" id="rcaCauseEdgeList"></ul>
+                                        </div>
+                                        <div class="rca-detail-block">
+                                            <div class="rca-detail-label">Source Records</div>
+                                            <ul class="rca-flat-list" id="rcaCauseSourceList"></ul>
+                                        </div>
+                                        <div class="rca-detail-block wide">
+                                            <div class="rca-detail-label">Evidence Chain</div>
+                                            <ul class="rca-flat-list" id="rcaCauseChainList"></ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="rca-list-card">
+                                    <h4 class="rca-list-title">Risk Signals</h4>
+                                    <ol class="rca-list" id="rcaSignalList"></ol>
+                                </div>
+                                <div class="rca-list-card">
+                                    <h4 class="rca-list-title">Recommended Actions</h4>
+                                    <ol class="rca-list" id="rcaActionList"></ol>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div id="nodeInfoBody" class="node-info-empty">建议在演示时先点击较大的节点，它们通常是当前问题下更关键的实体。</div>
+                    <div class="node-info" id="nodeInfo">
+                        <div class="node-info-head">
+                            <div>
+                                <div class="node-info-title" id="nodeInfoTitle">详情面板</div>
+                                <div class="node-info-subtitle" id="nodeInfoSubtitle">点击节点或关系后，这里会显示结构化信息。</div>
+                            </div>
+                            <div class="node-info-badge" id="nodeInfoBadge" style="background:#8a7e70;">等待选择</div>
+                        </div>
+                        <div id="nodeInfoBody" class="node-info-empty">建议在演示时先点击较大的节点，它们通常是当前问题下更关键的实体。</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -681,9 +1066,11 @@
     const traceBody = document.getElementById("traceBody");
     const traceToggle = document.getElementById("traceToggle");
     const progressList = document.getElementById("progressList");
+    const secondaryTraceTitle = document.getElementById("secondaryTraceTitle");
     const hopList = document.getElementById("hopList");
 
     const focusGraphBtn = document.getElementById("focusGraphBtn");
+    const rcaGraphBtn = document.getElementById("rcaGraphBtn");
     const fullGraphBtn = document.getElementById("fullGraphBtn");
     const vizMeta = document.getElementById("vizMeta");
     const graphCanvas = document.getElementById("graphCanvas");
@@ -696,12 +1083,36 @@
     const nodeInfoSubtitle = document.getElementById("nodeInfoSubtitle");
     const nodeInfoBadge = document.getElementById("nodeInfoBadge");
     const nodeInfoBody = document.getElementById("nodeInfoBody");
+    const rcaPanel = document.getElementById("rcaPanel");
+    const rcaTitle = document.getElementById("rcaTitle");
+    const rcaSubtitle = document.getElementById("rcaSubtitle");
+    const rcaSeverity = document.getElementById("rcaSeverity");
+    const rcaTopCause = document.getElementById("rcaTopCause");
+    const rcaTarget = document.getElementById("rcaTarget");
+    const rcaSignalCount = document.getElementById("rcaSignalCount");
+    const rcaActionCount = document.getElementById("rcaActionCount");
+    const rcaExposure = document.getElementById("rcaExposure");
+    const rcaGraphSpan = document.getElementById("rcaGraphSpan");
+    const rcaInvestigationList = document.getElementById("rcaInvestigationList");
+    const rcaCauseList = document.getElementById("rcaCauseList");
+    const rcaSignalList = document.getElementById("rcaSignalList");
+    const rcaActionList = document.getElementById("rcaActionList");
+    const rcaCauseDetailTitle = document.getElementById("rcaCauseDetailTitle");
+    const rcaCauseDetailMode = document.getElementById("rcaCauseDetailMode");
+    const rcaCauseDetailSummary = document.getElementById("rcaCauseDetailSummary");
+    const rcaCauseEvidenceList = document.getElementById("rcaCauseEvidenceList");
+    const rcaCauseNodeList = document.getElementById("rcaCauseNodeList");
+    const rcaCauseEdgeList = document.getElementById("rcaCauseEdgeList");
+    const rcaCauseChainList = document.getElementById("rcaCauseChainList");
+    const rcaCauseSourceList = document.getElementById("rcaCauseSourceList");
 
     const sessionKey = "scg_conversation_id";
     let conversationId = localStorage.getItem(sessionKey);
     let lastQuestion = "";
     let graphMode = "focus";
     let graphChart = null;
+    let lastRca = null;
+    let lastRcaCauseIndex = 0;
 
     if (!conversationId) {
         conversationId = `conv_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -754,9 +1165,296 @@
         traceMeta.textContent = "request_id: -";
         progressList.innerHTML = "";
         hopList.innerHTML = "";
+        secondaryTraceTitle.textContent = "Hop Tools";
         tracePanel.style.display = "none";
         traceBody.style.display = "grid";
         traceToggle.textContent = "Collapse";
+    }
+
+    function severityText(severity) {
+        const map = {
+            low: "低风险",
+            medium: "中风险",
+            high: "高风险",
+            critical: "关键风险",
+        };
+        return map[severity] || "未评估";
+    }
+
+    function formatCompactValue(value) {
+        if (value == null || value === "") return "-";
+        const num = Number(value);
+        if (Number.isFinite(num)) {
+            if (Math.abs(num) >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+            if (Math.abs(num) >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+            return Number.isInteger(num) ? String(num) : num.toFixed(2);
+        }
+        return String(value);
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function fillList(listNode, items, emptyText, formatter) {
+        listNode.innerHTML = "";
+        const safeItems = Array.isArray(items) ? items : [];
+        if (!safeItems.length) {
+            const li = document.createElement("li");
+            li.textContent = emptyText;
+            listNode.appendChild(li);
+            return;
+        }
+        safeItems.forEach((item, idx) => {
+            const li = document.createElement("li");
+            if (formatter) {
+                const rendered = formatter(item, idx);
+                if (rendered && typeof rendered === "object") {
+                    if (rendered.html != null) {
+                        li.innerHTML = rendered.html;
+                    } else if (rendered.text != null) {
+                        li.textContent = rendered.text;
+                    } else {
+                        li.textContent = String(rendered);
+                    }
+                } else {
+                    li.textContent = rendered != null ? String(rendered) : "";
+                }
+            } else {
+                li.textContent = String(item);
+            }
+            listNode.appendChild(li);
+        });
+    }
+
+    function updateRcaButtonState() {
+        rcaGraphBtn.disabled = !lastRca;
+    }
+
+    function evidenceModeText(mode) {
+        return mode === "direct" ? "直接证据" : "结构证据";
+    }
+
+    function renderCauseDetail(cause) {
+        if (!cause || typeof cause !== "object") {
+            rcaCauseDetailTitle.textContent = "选择一个根因候选后，这里会展示证据链、支撑节点和溯源记录。";
+            rcaCauseDetailSummary.textContent = "当前没有可展示的根因细节。";
+            rcaCauseDetailMode.textContent = "未选择";
+            rcaCauseDetailMode.className = "rca-detail-badge structural";
+            fillList(rcaCauseEvidenceList, [], "暂无证据摘要");
+            fillList(rcaCauseNodeList, [], "暂无支撑节点");
+            fillList(rcaCauseEdgeList, [], "暂无支撑关系");
+            fillList(rcaCauseChainList, [], "暂无事件链");
+            fillList(rcaCauseSourceList, [], "暂无溯源记录");
+            return;
+        }
+
+        const label = cause.label || cause.cause || "cause";
+        const score = cause.score != null ? ` (${cause.score})` : "";
+        const evidenceMode = String(cause.evidence_mode || "structural");
+        const evidence = Array.isArray(cause.evidence) ? cause.evidence.filter(Boolean) : [];
+        const supportingNodes = Array.isArray(cause.supporting_nodes) ? cause.supporting_nodes : [];
+        const supportingEdges = Array.isArray(cause.supporting_edges) ? cause.supporting_edges : [];
+        const evidenceChain = Array.isArray(cause.evidence_chain) ? cause.evidence_chain : [];
+        const sourceRecords = Array.isArray(cause.source_records) ? cause.source_records : [];
+
+        rcaCauseDetailTitle.textContent = `${label}${score}`;
+        rcaCauseDetailSummary.textContent = evidence[0] || cause.explanation_hint || "当前根因主要由结构化 RCA 结果支持。";
+        rcaCauseDetailMode.textContent = evidenceModeText(evidenceMode);
+        rcaCauseDetailMode.className = `rca-detail-badge ${evidenceMode === "direct" ? "direct" : "structural"}`;
+
+        fillList(rcaCauseEvidenceList, evidence.slice(0, 4), "暂无证据摘要");
+        fillList(
+            rcaCauseNodeList,
+            supportingNodes,
+            "暂无支撑节点",
+            (node) => ({ html: `${escapeHtml(node.label || "Node")}: <small>${escapeHtml(node.value || "-")}</small>` })
+        );
+        fillList(rcaCauseEdgeList, supportingEdges.slice(0, 8), "暂无支撑关系");
+        fillList(
+            rcaCauseChainList,
+            evidenceChain.slice(0, 3),
+            "暂无事件链",
+            (chain) => {
+                const narrative = escapeHtml(chain.narrative || chain.chain_type || "事件链");
+                const severity = chain.severity ? `<small>severity: ${escapeHtml(chain.severity)}</small>` : "";
+                return { html: `${narrative}${severity}` };
+            }
+        );
+        fillList(
+            rcaCauseSourceList,
+            sourceRecords.slice(0, 6),
+            "暂无溯源记录",
+            (record) => {
+                const title = escapeHtml(record.id || "source");
+                const summary = record.summary ? `<small>${escapeHtml(record.summary)}</small>` : "";
+                const rowKey = record.source_row_key ? `<small>${escapeHtml(record.source_row_key)}</small>` : "";
+                return { html: `${title}${summary}${rowKey}` };
+            }
+        );
+    }
+
+    function renderCauseList(causes) {
+        const safeCauses = Array.isArray(causes) ? causes.slice(0, 3) : [];
+        rcaCauseList.innerHTML = "";
+        if (!safeCauses.length) {
+            const li = document.createElement("li");
+            li.textContent = "暂无根因候选";
+            rcaCauseList.appendChild(li);
+            renderCauseDetail(null);
+            return;
+        }
+
+        lastRcaCauseIndex = Math.max(0, Math.min(lastRcaCauseIndex, safeCauses.length - 1));
+        safeCauses.forEach((cause, idx) => {
+            const li = document.createElement("li");
+            li.className = `rca-cause-item ${idx === lastRcaCauseIndex ? "active" : ""}`.trim();
+            const label = escapeHtml(cause.label || cause.cause || "cause");
+            const score = cause.score != null ? escapeHtml(cause.score) : "-";
+            const evidence = Array.isArray(cause.evidence) ? cause.evidence.filter(Boolean) : [];
+            const note = evidence.length ? `<small>${escapeHtml(evidence[0])}</small>` : "";
+            li.innerHTML = `
+                <div class="rca-cause-row">
+                    <span>${label}</span>
+                    <span class="rca-cause-score">${score}</span>
+                </div>
+                ${note}
+            `;
+            li.addEventListener("click", () => {
+                lastRcaCauseIndex = idx;
+                renderCauseList(safeCauses);
+            });
+            rcaCauseList.appendChild(li);
+        });
+
+        renderCauseDetail(safeCauses[lastRcaCauseIndex]);
+    }
+
+    function clearRcaPanel() {
+        lastRca = null;
+        lastRcaCauseIndex = 0;
+        rcaPanel.style.display = "none";
+        rcaTitle.textContent = "RCA Overview";
+        rcaSubtitle.textContent = "根因分析结果将显示在这里。";
+        rcaSeverity.textContent = "未激活";
+        rcaSeverity.className = "severity-badge";
+        rcaTopCause.textContent = "-";
+        rcaTarget.textContent = "-";
+        rcaSignalCount.textContent = "0";
+        rcaActionCount.textContent = "0";
+        rcaExposure.textContent = "-";
+        rcaGraphSpan.textContent = "-";
+        fillList(rcaInvestigationList, [], "调查尚未启动");
+        renderCauseList([]);
+        fillList(rcaSignalList, [], "暂无风险信号");
+        fillList(rcaActionList, [], "暂无处置建议");
+        updateRcaButtonState();
+    }
+
+    function renderRcaPanel(rca) {
+        lastRca = rca && typeof rca === "object" ? rca : null;
+        updateRcaButtonState();
+        if (!lastRca) {
+            rcaPanel.style.display = "none";
+            return;
+        }
+
+        const incident = lastRca.incident_summary || {};
+        const anomaly = lastRca.anomaly || {};
+        const topCause = incident.top_cause || {};
+        const validation = lastRca.validation || {};
+        const graphMetrics = lastRca.graph_metrics || {};
+        const causes = Array.isArray(lastRca.candidate_causes) ? lastRca.candidate_causes : [];
+        const signals = Array.isArray(lastRca.risk_signals) ? lastRca.risk_signals : [];
+        const actions = Array.isArray(lastRca.recommended_actions) ? lastRca.recommended_actions : [];
+        const investigationSteps = Array.isArray(lastRca.investigation_steps) ? lastRca.investigation_steps : [];
+        const severity = String(incident.severity || anomaly.severity || "").toLowerCase();
+        const exposureValue = validation.profit_exposure ?? validation.profit_at_risk ?? validation.profit ?? "-";
+        const graphSpan = graphMetrics.max_component_product_span ?? graphMetrics.max_supplier_component_span ?? graphMetrics.max_carrier_order_span ?? "-";
+
+        rcaPanel.style.display = "block";
+        rcaTitle.textContent = incident.title || "RCA Overview";
+        rcaSubtitle.textContent = `${anomaly.type || "anomaly"} | ${lastRca.route?.summary || "结构化 RCA 已生成"}`;
+        rcaSeverity.textContent = severityText(severity);
+        rcaSeverity.className = `severity-badge ${severity || ""}`.trim();
+        rcaTopCause.textContent = topCause.label || topCause.cause || "-";
+        rcaTarget.textContent = `${incident.target_type || anomaly.target_type || "-"} / ${incident.target_id || anomaly.target_id || "-"}`;
+        rcaSignalCount.textContent = String(signals.length);
+        rcaActionCount.textContent = String(actions.length);
+        rcaExposure.textContent = formatCompactValue(exposureValue);
+        rcaGraphSpan.textContent = formatCompactValue(graphSpan);
+
+        fillList(
+            rcaInvestigationList,
+            investigationSteps.slice(0, 4),
+            "当前结果由 seed evidence 直接得到，未追加 probe 调查。",
+            (step) => {
+                const title = `Step ${step.step || "?"}. ${step.probe_label || step.probe || "probe"}`;
+                const hypothesis = step.hypothesis ? `<small>${step.hypothesis}</small>` : "";
+                const finding = Array.isArray(step.findings) && step.findings.length
+                    ? `<small>${step.findings[0]}</small>`
+                    : "";
+                return { html: `${title}${hypothesis}${finding}` };
+            }
+        );
+
+        renderCauseList(causes);
+
+        fillList(
+            rcaSignalList,
+            signals.slice(0, 4),
+            "暂无风险信号",
+            (signal) => {
+                const label = signal.label || signal.signal_type || "signal";
+                const score = signal.score != null ? ` (${signal.score})` : "";
+                const evidence = Array.isArray(signal.evidence) ? signal.evidence.filter(Boolean).slice(0, 1) : [];
+                return {
+                    html: `${label}${score}${evidence.length ? `<small>${evidence[0]}</small>` : ""}`,
+                };
+            }
+        );
+        fillList(rcaActionList, actions.slice(0, 4), "暂无处置建议");
+    }
+
+    function rcaFromGraphMeta(meta) {
+        if (!meta || !meta.structured_rca) return null;
+        return {
+            route: meta.route || {},
+            anomaly: {
+                type: meta.incident_summary?.title || "rca",
+                target_type: meta.target_type,
+                target_id: meta.target_id,
+                severity: meta.incident_summary?.severity,
+            },
+            incident_summary: meta.incident_summary || {},
+            validation: meta.validation || {},
+            graph_metrics: meta.graph_metrics || {},
+            investigation: meta.investigation || {},
+            investigation_steps: meta.investigation_steps || [],
+            risk_signals: meta.risk_signals || [],
+            candidate_causes: meta.candidate_causes || [],
+            recommended_actions: meta.recommended_actions || [],
+        };
+    }
+
+    function toDisplayText(value) {
+        if (value == null) return "-";
+        if (Array.isArray(value)) {
+            return value.map((item) => toDisplayText(item)).join(" | ");
+        }
+        if (typeof value === "object") {
+            try {
+                return JSON.stringify(value, null, 2);
+            } catch (err) {
+                return String(value);
+            }
+        }
+        return String(value);
     }
 
     function renderTrace(trace) {
@@ -768,10 +1466,12 @@
         const requestId = trace.request_id || "-";
         const progress = Array.isArray(trace.progress_log) ? trace.progress_log : [];
         const hops = Array.isArray(trace.hops) ? trace.hops : [];
+        const investigationSteps = Array.isArray(trace.investigation_steps) ? trace.investigation_steps : [];
 
         traceMeta.textContent = `request_id: ${requestId}`;
         progressList.innerHTML = "";
         hopList.innerHTML = "";
+        secondaryTraceTitle.textContent = investigationSteps.length ? "Investigation Steps" : "Hop Tools";
 
         progress.forEach((line) => {
             const li = document.createElement("li");
@@ -779,11 +1479,19 @@
             progressList.appendChild(li);
         });
 
-        hops.forEach((hop, idx) => {
-            const tool = hop?.tool_trace?.tool || "unknown";
-            const subq = hop?.sub_question || "";
+        const secondaryItems = investigationSteps.length
+            ? investigationSteps.map((step, idx) => ({
+                label: `Step ${step.step || idx + 1}: ${step.probe_label || step.probe || "probe"}`,
+                detail: step.hypothesis || "",
+            }))
+            : hops.map((hop, idx) => ({
+                label: `Hop ${idx + 1}: ${hop?.tool_trace?.tool || "unknown"}`,
+                detail: hop?.sub_question || "",
+            }));
+
+        secondaryItems.forEach((item) => {
             const li = document.createElement("li");
-            li.textContent = `Hop ${idx + 1}: ${tool}${subq ? " | " + subq : ""}`;
+            li.textContent = item.detail ? `${item.label} | ${item.detail}` : item.label;
             hopList.appendChild(li);
         });
 
@@ -793,9 +1501,9 @@
             progressList.appendChild(li);
         }
 
-        if (!hops.length) {
+        if (!secondaryItems.length) {
             const li = document.createElement("li");
-            li.textContent = "No hop-tool details";
+            li.textContent = investigationSteps.length ? "No investigation-step details" : "No hop-tool details";
             hopList.appendChild(li);
         }
 
@@ -804,18 +1512,15 @@
 
     function setGraphButtons(mode) {
         graphMode = mode;
-        if (mode === "focus") {
-            focusGraphBtn.classList.add("active");
-            fullGraphBtn.classList.remove("active");
-        } else {
-            fullGraphBtn.classList.add("active");
-            focusGraphBtn.classList.remove("active");
-        }
+        focusGraphBtn.classList.toggle("active", mode === "focus");
+        rcaGraphBtn.classList.toggle("active", mode === "rca_evidence");
+        fullGraphBtn.classList.toggle("active", mode === "full");
+        updateRcaButtonState();
     }
 
     function nodeLabel(node) {
         const p = node?.props || {};
-        return p.name || p.id || p.code || p.sku || `${(node.labels || ["Node"])[0]}#${node.id}`;
+        return p.title || p.label || p.text || p.name || p.id || p.code || p.sku || `${(node.labels || ["Node"])[0]}#${node.id}`;
     }
 
     function labelColor(label) {
@@ -828,6 +1533,9 @@
             Carrier: "#8b5e3c",
             Category: "#b25f8d",
             Department: "#6b7a89",
+            RCAIncident: "#8b2222",
+            RiskSignal: "#c58a2d",
+            SuggestedAction: "#2f7d63",
             Node: "#888888",
         };
         return palette[label] || "#666666";
@@ -836,10 +1544,18 @@
     function setGraphMetrics(meta, nodes, edges, label) {
         const nodeCount = meta.node_count || nodes.length || 0;
         const edgeCount = meta.edge_count || edges.length || 0;
-        const mode = (meta.mode || "").toLowerCase() === "full" ? "全量图谱" : "问题聚焦";
+        const effectiveMode = String(meta.effective_mode || meta.mode || "").toLowerCase();
+        const mode = effectiveMode === "full"
+            ? "全量图谱"
+            : effectiveMode === "rca_evidence"
+                ? "RCA证据"
+                : "问题聚焦";
         const keywords = Array.isArray(meta.keywords) ? meta.keywords.filter(Boolean) : [];
+        const incident = meta.incident_summary || {};
         const hint = meta.truncated
             ? "当前为截断展示，适合大屏演示"
+            : incident.top_cause?.label
+                ? `重点根因：${incident.top_cause.label}`
             : keywords.length
                 ? `围绕 ${keywords.slice(0, 3).join(" / ")} 展开`
                 : (label || "图谱已加载");
@@ -915,7 +1631,7 @@
         ];
         const props = data.props || {};
         Object.keys(props).slice(0, 10).forEach((k) => {
-            rows.push({ key: k, value: String(props[k]) });
+            rows.push({ key: k, value: toDisplayText(props[k]) });
         });
         renderDetailRows(rows);
     }
@@ -930,10 +1646,15 @@
         nodeInfoSubtitle.textContent = "关系详情";
         nodeInfoBadge.textContent = "Relationship";
         nodeInfoBadge.style.background = "#6b7a89";
-        renderDetailRows([
+        const rows = [
             { key: "关系类型", value: data.label || "REL" },
             { key: "方向", value: `${data.sourceName || data.source} -> ${data.targetName || data.target}` },
-        ]);
+        ];
+        const props = data.props || {};
+        Object.keys(props).slice(0, 8).forEach((k) => {
+            rows.push({ key: k, value: toDisplayText(props[k]) });
+        });
+        renderDetailRows(rows);
     }
 
     function clearGraph() {
@@ -958,6 +1679,12 @@
         const edges = Array.isArray(graphData?.edges) ? graphData.edges : [];
         const meta = graphData?.meta || {};
         const isFullMode = (meta.mode || "").toLowerCase() === "full";
+        const targetNodeId = meta.target_node_id ? String(meta.target_node_id) : "";
+        const incidentNodeId = meta.incident_summary?.incident_id ? String(meta.incident_summary.incident_id) : "";
+
+        if (meta.structured_rca) {
+            renderRcaPanel(rcaFromGraphMeta(meta));
+        }
 
         if (!nodes.length) {
             vizMeta.textContent = `${label}: 没有返回可展示的节点。`;
@@ -994,26 +1721,46 @@
         nodes.forEach((n) => {
             const labelName = (n.labels && n.labels[0]) ? n.labels[0] : "Node";
             const displayName = nodeLabel(n);
-            const degree = degreeMap.get(String(n.id)) || 0;
-            const symbolSize = Math.max(18, Math.min(46, 18 + degree * 2.8));
-            const importantNode = degree >= 3 || ["Supplier", "Order", "Product"].includes(labelName);
+            const rawId = String(n.id);
+            const degree = degreeMap.get(rawId) || 0;
+            const isTarget = rawId === targetNodeId;
+            const isIncident = rawId === incidentNodeId;
+            const isRcaNode = ["RCAIncident", "RiskSignal", "SuggestedAction"].includes(labelName);
+            const baseSize = Math.max(18, Math.min(46, 18 + degree * 2.8));
+            const symbolSize = isIncident ? Math.max(baseSize, 48) : isTarget ? Math.max(baseSize, 42) : baseSize;
+            const importantNode = degree >= 3 || ["Supplier", "Order", "Product", "RCAIncident", "RiskSignal"].includes(labelName);
+            const nodeBorderColor = isIncident ? "#5a0f0f" : isTarget ? "#f0b45a" : "#eadfce";
+            const symbol = labelName === "RCAIncident"
+                ? "roundRect"
+                : labelName === "RiskSignal"
+                    ? "diamond"
+                    : labelName === "SuggestedAction"
+                        ? "rect"
+                        : "circle";
             chartNodes.push({
-                id: String(n.id),
+                id: rawId,
                 name: showNodeText || importantNode ? displayName : "",
                 value: displayName,
                 labelName,
-                rawId: String(n.id),
+                rawId,
                 props: n.props || {},
                 category: categoriesMap.get(labelName),
+                symbol,
                 symbolSize,
-                itemStyle: { color: labelColor(labelName) },
+                itemStyle: {
+                    color: labelColor(labelName),
+                    borderColor: nodeBorderColor,
+                    borderWidth: isRcaNode || isTarget ? 3 : 1.5,
+                    shadowBlur: isIncident || isTarget ? 16 : 0,
+                    shadowColor: isIncident ? "rgba(139,34,34,0.35)" : isTarget ? "rgba(240,180,90,0.35)" : "transparent",
+                },
                 label: {
-                    show: showNodeText || importantNode,
+                    show: showNodeText || importantNode || isTarget || isIncident || isRcaNode,
                     color: "#111111",
-                    fontSize: importantNode ? 11 : 10,
-                    fontWeight: 600,
+                    fontSize: importantNode || isTarget || isIncident ? 11 : 10,
+                    fontWeight: isIncident || isTarget ? 700 : 600,
                     backgroundColor: "#fffdf8",
-                    borderColor: "#eadfce",
+                    borderColor: nodeBorderColor,
                     borderWidth: 1,
                     padding: [2, 4],
                     borderRadius: 4,
@@ -1027,13 +1774,20 @@
             const s = String(e.source);
             const t = String(e.target);
             if (!nodeMap.has(s) || !nodeMap.has(t)) return;
+            const props = e.props || {};
             chartEdges.push({
                 source: s,
                 target: t,
                 value: e.type || "REL",
                 sourceName: nodeLabel(nodeMap.get(s)),
                 targetName: nodeLabel(nodeMap.get(t)),
-                lineStyle: { color: "#9b8a74", width: 1.8, opacity: 0.9 },
+                props,
+                lineStyle: {
+                    color: props.virtual ? "#c3522f" : "#9b8a74",
+                    width: props.virtual ? 2.2 : 1.8,
+                    opacity: 0.9,
+                    type: props.virtual ? "dashed" : "solid",
+                },
                 label: {
                     show: showEdgeLabel,
                     formatter: "{c}",
@@ -1125,6 +1879,7 @@
                     label: d.value || "REL",
                     sourceName: d.sourceName || d.source,
                     targetName: d.targetName || d.target,
+                    props: d.props || {},
                 });
             } else {
                 renderNodeInfo(null);
@@ -1135,17 +1890,32 @@
         const edgeCount = meta.edge_count || edges.length;
         const truncated = meta.truncated ? " | 已截断展示" : "";
         vizMeta.textContent = `${label}: ${nodeCount} 个节点，${edgeCount} 条关系${truncated}`;
+        if (meta.structured_rca) {
+            const incidentNode = chartNodes.find((item) => item.id === incidentNodeId);
+            if (incidentNode) {
+                renderNodeInfo({
+                    label: incidentNode.labelName,
+                    rawId: incidentNode.rawId,
+                    displayName: incidentNode.value || incidentNode.name,
+                    props: incidentNode.props || {},
+                });
+            }
+        }
     }
 
     async function loadGraph(mode, questionOverride = null) {
         const question = questionOverride ?? lastQuestion;
-        if (!question && mode === "focus") {
+        if (!question && mode !== "full") {
             vizMeta.textContent = "请先提问，再加载聚焦图谱。";
             return;
         }
 
         setGraphButtons(mode);
-        vizMeta.textContent = mode === "focus" ? "正在加载聚焦图谱..." : "正在加载全量图谱...";
+        vizMeta.textContent = mode === "full"
+            ? "正在加载全量图谱..."
+            : mode === "rca_evidence"
+                ? "正在加载 RCA 证据图..."
+                : "正在加载聚焦图谱...";
 
         try {
             const resp = await fetch(GRAPH_URL, {
@@ -1153,16 +1923,18 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     question,
+                    conversation_id: conversationId,
                     mode,
-                    max_nodes: mode === "focus" ? 80 : 260,
-                    max_edges: mode === "focus" ? 150 : 520,
+                    max_nodes: mode === "full" ? 260 : mode === "rca_evidence" ? 120 : 80,
+                    max_edges: mode === "full" ? 520 : mode === "rca_evidence" ? 220 : 150,
                 }),
             });
             if (!resp.ok) {
                 throw new Error("图谱接口请求失败");
             }
             const data = await resp.json();
-            renderGraph(data.graph || {}, mode === "focus" ? "聚焦图谱" : "全量图谱");
+            const labelText = mode === "full" ? "全量图谱" : mode === "rca_evidence" ? "RCA 证据图" : "聚焦图谱";
+            renderGraph(data.graph || {}, labelText);
         } catch (err) {
             vizMeta.textContent = "图谱加载失败：" + err.message;
         }
@@ -1253,6 +2025,7 @@
                         updateAssistantMessage(assistantNode, replyText);
                     }
                     renderTrace(payload.trace);
+                    renderRcaPanel(payload.rca || null);
                     if (payload.conversation_id) {
                         conversationId = payload.conversation_id;
                         localStorage.setItem(sessionKey, conversationId);
@@ -1270,7 +2043,7 @@
 
             setStatus("回答完成，正在刷新图谱...");
             typing.textContent = "正在刷新图谱...";
-            await loadGraph("focus", text);
+            await loadGraph(finalPayload?.rca ? "rca_evidence" : "focus", text);
             setStatus("已完成");
         } catch (err) {
             assistantNode.remove();
@@ -1299,7 +2072,9 @@
     resetBtn.addEventListener("click", () => {
         chat.innerHTML = "";
         chat.appendChild(typing);
+        lastQuestion = "";
         clearTracePanel();
+        clearRcaPanel();
         clearGraph();
         vizMeta.textContent = "图谱尚未加载。";
         appendMessage("对话已清空，可以继续提出新的问题。", "assistant");
@@ -1310,7 +2085,9 @@
         localStorage.setItem(sessionKey, conversationId);
         chat.innerHTML = "";
         chat.appendChild(typing);
+        lastQuestion = "";
         clearTracePanel();
+        clearRcaPanel();
         clearGraph();
         vizMeta.textContent = "图谱尚未加载。";
         appendMessage("已创建新会话，可以继续开始提问。", "assistant");
@@ -1332,11 +2109,16 @@
         loadGraph("focus");
     });
 
+    rcaGraphBtn.addEventListener("click", () => {
+        loadGraph("rca_evidence");
+    });
+
     fullGraphBtn.addEventListener("click", () => {
         loadGraph("full");
     });
 
     clearTracePanel();
+    clearRcaPanel();
     setGraphButtons("focus");
 </script>
 </body>

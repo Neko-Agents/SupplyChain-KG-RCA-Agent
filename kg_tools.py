@@ -6,6 +6,21 @@ from typing import Any, Dict, List, Optional
 from langchain_core.tools import tool
 from langchain_neo4j import Neo4jGraph
 
+
+def _load_dotenv() -> None:
+    if not os.path.exists(".env"):
+        return
+    with open(".env", "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "88888888")
@@ -31,6 +46,14 @@ def get_last_trace() -> Optional[Dict[str, Any]]:
 
 def _json(result: List[Dict[str, Any]]) -> str:
     return json.dumps(result, ensure_ascii=False)
+
+
+def _coerce_top_k(value: Any, default: int = 10, maximum: int = 50) -> int:
+    try:
+        value = int(value)
+    except Exception:
+        value = default
+    return max(1, min(value, maximum))
 
 
 @tool
@@ -152,7 +175,8 @@ def analyze_dynamic_bottleneck(scenario: str = "general") -> str:
     CALL gds.graph.project(graph_name, labels, rels) YIELD graphName
     CALL gds.betweenness.stream($graph_name)
     YIELD nodeId, score
-    MATCH (n:Supplier) WHERE id(n) = nodeId
+    WITH gds.util.asNode(nodeId) AS n, score
+    WHERE n:Supplier
     WITH n, score
     ORDER BY score DESC
     LIMIT 3
@@ -427,7 +451,8 @@ def analyze_key_bottlenecks(scenario: str = "general") -> str:
     CALL gds.graph.project(graph_name, labels, rels) YIELD graphName
     CALL gds.betweenness.stream($graph_name)
     YIELD nodeId, score
-    MATCH (n:Supplier) WHERE id(n) = nodeId
+    WITH gds.util.asNode(nodeId) AS n, score
+    WHERE n:Supplier
     WITH n, score
     ORDER BY score DESC
     LIMIT 5
@@ -941,4 +966,536 @@ def delivery_performance_by_ship_mode(top_k: int = 10) -> str:
     result = graph.query(cypher, params={"top_k": top_k})
     if not result:
         return "No delivery performance data found."
+    return _json(result)
+
+
+@tool
+def component_exposure_risk(top_k: int = 10) -> str:
+    """
+    Rank components by downstream exposure, quality, and cost risk.
+    前端可用查询：查看组件层面的订单数、利润暴露、平均制造成本和次品率 TopN。
+    业务可用解读：用于识别最值得优先保供、替代或质控的核心组件。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (comp:Component)
+    CALL {
+        WITH comp
+        MATCH (s:Supplier)-[sup:SUPPLIES_COMPONENT]->(comp)
+        RETURN
+            count(DISTINCT s) AS supplier_count,
+            avg(sup.defect_rate) AS avg_defect_rate,
+            avg(sup.mfg_cost) AS avg_mfg_cost
+    }
+    CALL {
+        WITH comp
+        MATCH (comp)-[:USED_IN]->(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)
+        RETURN
+            count(DISTINCT p) AS affected_products,
+            count(DISTINCT o) AS affected_orders,
+            sum(coalesce(con.net_total, 0)) AS net_exposure,
+            sum(coalesce(con.profit, 0)) AS profit_exposure
+    }
+    WITH
+        comp,
+        supplier_count,
+        avg_defect_rate,
+        avg_mfg_cost,
+        affected_products,
+        affected_orders,
+        net_exposure,
+        profit_exposure
+    WHERE supplier_count > 0 OR affected_orders > 0
+    RETURN
+        comp.name AS component,
+        supplier_count,
+        affected_products,
+        affected_orders,
+        avg_defect_rate,
+        avg_mfg_cost,
+        net_exposure,
+        profit_exposure
+    ORDER BY profit_exposure DESC, affected_orders DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "component_exposure_risk", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No component exposure risk data found."
+    return _json(result)
+
+
+@tool
+def single_source_components(top_k: int = 10) -> str:
+    """
+    Identify components that depend on a single supplier.
+    前端可用查询：查看单一供应来源组件及其下游产品、订单和利润暴露 TopN。
+    业务可用解读：用于识别最典型的单点依赖风险。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (comp:Component)
+    CALL {
+        WITH comp
+        MATCH (s:Supplier)-[sup:SUPPLIES_COMPONENT]->(comp)
+        RETURN
+            collect(DISTINCT s.name) AS suppliers,
+            avg(sup.defect_rate) AS avg_defect_rate,
+            avg(sup.mfg_cost) AS avg_mfg_cost
+    }
+    WITH comp, suppliers, avg_defect_rate, avg_mfg_cost
+    WHERE size(suppliers) = 1
+    CALL {
+        WITH comp
+        MATCH (comp)-[:USED_IN]->(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)
+        RETURN
+            count(DISTINCT p) AS affected_products,
+            count(DISTINCT o) AS affected_orders,
+            sum(coalesce(con.net_total, 0)) AS net_exposure,
+            sum(coalesce(con.profit, 0)) AS profit_exposure
+    }
+    RETURN
+        comp.name AS component,
+        suppliers[0] AS sole_supplier,
+        affected_products,
+        affected_orders,
+        avg_defect_rate,
+        avg_mfg_cost,
+        net_exposure,
+        profit_exposure
+    ORDER BY profit_exposure DESC, affected_orders DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "single_source_components", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No single-source component data found."
+    return _json(result)
+
+
+@tool
+def department_exposure_summary(top_k: int = 10) -> str:
+    """
+    Summarize revenue, profit, and late exposure by department.
+    前端可用查询：查看部门维度的订单数、营收、利润和延迟订单概况 TopN。
+    业务可用解读：用于识别部门级经营暴露与履约风险。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (dept:Department)
+    CALL {
+        WITH dept
+        MATCH (dept)<-[:BELONGS_TO_DEPARTMENT]-(cat:Category)<-[:BELONGS_TO_CATEGORY]-(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)
+        RETURN
+            count(DISTINCT o) AS orders,
+            count(DISTINCT p) AS products,
+            sum(coalesce(con.net_total, 0)) AS net_revenue,
+            sum(coalesce(con.profit, 0)) AS profit
+    }
+    CALL {
+        WITH dept
+        MATCH (dept)<-[:BELONGS_TO_DEPARTMENT]-(cat:Category)<-[:BELONGS_TO_CATEGORY]-(p:Product)<-[:CONTAINS_PRODUCT]-(o:Order)-[ship:SHIPPED_BY]->(:Carrier)
+        RETURN
+            count(DISTINCT CASE WHEN coalesce(ship.late_risk, 0) = 1 THEN o END) AS late_orders,
+            avg(CASE WHEN coalesce(ship.late_risk, 0) = 1 THEN ship.days_real - ship.days_scheduled END) AS avg_delay_days
+    }
+    WITH dept, orders, products, net_revenue, profit, late_orders, avg_delay_days
+    WHERE orders > 0
+    RETURN
+        dept.name AS department,
+        products,
+        orders,
+        net_revenue,
+        profit,
+        late_orders,
+        avg_delay_days,
+        CASE
+            WHEN orders = 0 THEN 0.0
+            ELSE round(toFloat(late_orders) / orders * 10000) / 100
+        END AS late_order_rate
+    ORDER BY profit DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "department_exposure_summary", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No department exposure summary data found."
+    return _json(result)
+
+
+@tool
+def department_supply_fragility(top_k: int = 10) -> str:
+    """
+    Analyze department fragility from supplier concentration and quality signals.
+    前端可用查询：查看部门维度的供应商数量、组件数量、单一来源组件数和利润暴露 TopN。
+    业务可用解读：用于识别最脆弱的业务部门和优先治理方向。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (dept:Department)
+    CALL {
+        WITH dept
+        MATCH (dept)<-[:BELONGS_TO_DEPARTMENT]-(cat:Category)<-[:BELONGS_TO_CATEGORY]-(p:Product)
+        RETURN collect(DISTINCT p) AS products
+    }
+    CALL {
+        WITH products
+        UNWIND products AS p
+        MATCH (s:Supplier)-[sup:SUPPLIES_COMPONENT]->(comp:Component)-[:USED_IN]->(p)
+        RETURN
+            count(DISTINCT s) AS supplier_count,
+            count(DISTINCT comp) AS component_count,
+            avg(sup.defect_rate) AS avg_defect_rate,
+            avg(sup.mfg_cost) AS avg_mfg_cost
+    }
+    CALL {
+        WITH products
+        UNWIND products AS p
+        MATCH (p)<-[con:CONTAINS_PRODUCT]-(o:Order)
+        RETURN
+            count(DISTINCT o) AS orders,
+            sum(coalesce(con.net_total, 0)) AS net_exposure,
+            sum(coalesce(con.profit, 0)) AS profit_exposure
+    }
+    CALL {
+        WITH products
+        UNWIND products AS p
+        MATCH (s:Supplier)-[:SUPPLIES_COMPONENT]->(comp:Component)-[:USED_IN]->(p)
+        WITH comp, count(DISTINCT s) AS supplier_count
+        WHERE supplier_count = 1
+        RETURN count(DISTINCT comp) AS single_source_components
+    }
+    WITH
+        dept,
+        size(products) AS product_count,
+        supplier_count,
+        component_count,
+        single_source_components,
+        avg_defect_rate,
+        avg_mfg_cost,
+        orders,
+        net_exposure,
+        profit_exposure
+    WHERE product_count > 0
+    RETURN
+        dept.name AS department,
+        product_count,
+        supplier_count,
+        component_count,
+        single_source_components,
+        avg_defect_rate,
+        avg_mfg_cost,
+        orders,
+        net_exposure,
+        profit_exposure
+    ORDER BY single_source_components DESC, profit_exposure DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "department_supply_fragility", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No department supply fragility data found."
+    return _json(result)
+
+
+@tool
+def on_time_delivery_by_supplier(top_k: int = 10) -> str:
+    """
+    Rank suppliers by delivery timeliness across their downstream orders.
+    前端可用查询：查看供应商维度的订单数、延迟订单数、准时率和利润暴露 TopN。
+    业务可用解读：用于识别交付表现差但业务暴露高的供应商。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (s:Supplier)
+    CALL {
+        WITH s
+        MATCH (s)-[:SUPPLIES_COMPONENT]->(:Component)-[:USED_IN]->(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)-[ship:SHIPPED_BY]->(:Carrier)
+        WITH DISTINCT o, con, ship
+        RETURN
+            count(DISTINCT o) AS orders,
+            count(DISTINCT CASE WHEN coalesce(ship.late_risk, 0) = 1 THEN o END) AS late_orders,
+            avg(ship.days_real - ship.days_scheduled) AS avg_delay_days,
+            sum(coalesce(con.net_total, 0)) AS net_exposure,
+            sum(coalesce(con.profit, 0)) AS profit_exposure
+    }
+    WITH s, orders, late_orders, avg_delay_days, net_exposure, profit_exposure
+    WHERE orders > 0
+    RETURN
+        s.name AS supplier,
+        orders,
+        late_orders,
+        avg_delay_days,
+        net_exposure,
+        profit_exposure,
+        CASE
+            WHEN orders = 0 THEN 0.0
+            ELSE round((1 - toFloat(late_orders) / orders) * 10000) / 100
+        END AS on_time_rate
+    ORDER BY on_time_rate ASC, profit_exposure DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "on_time_delivery_by_supplier", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No supplier delivery performance data found."
+    return _json(result)
+
+
+@tool
+def delay_root_mix(top_k: int = 10) -> str:
+    """
+    Find the most common delayed-order root-cause combinations.
+    前端可用查询：查看供应商、组件、承运商和运输方式组合导致的延迟风险 TopN。
+    业务可用解读：用于发现最常见的组合型延迟根因。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (s:Supplier)-[:SUPPLIES_COMPONENT]->(comp:Component)-[:USED_IN]->(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)-[ship:SHIPPED_BY]->(car:Carrier)
+    WHERE coalesce(ship.late_risk, 0) = 1
+    WITH DISTINCT s, comp, car, ship, o, con
+    RETURN
+        s.name AS supplier,
+        comp.name AS component,
+        car.name AS carrier,
+        ship.trans_mode AS transport_mode,
+        ship.ship_mode AS ship_mode,
+        count(DISTINCT o) AS delayed_orders,
+        avg(ship.days_real - ship.days_scheduled) AS avg_delay_days,
+        sum(coalesce(con.net_total, 0)) AS net_at_risk,
+        sum(coalesce(con.profit, 0)) AS profit_at_risk
+    ORDER BY delayed_orders DESC, profit_at_risk DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "delay_root_mix", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No delayed root-cause combination data found."
+    return _json(result)
+
+
+@tool
+def customer_delay_exposure(top_k: int = 10) -> str:
+    """
+    Rank customers by delayed-order financial exposure.
+    前端可用查询：查看客户维度的延迟订单数、风险营收和风险利润 TopN。
+    业务可用解读：用于识别受履约波动影响最大的客户群体。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (c:Customer)-[:PLACED_ORDER]->(o:Order)-[ship:SHIPPED_BY]->(:Carrier)
+    WHERE coalesce(ship.late_risk, 0) = 1
+    OPTIONAL MATCH (o)-[con:CONTAINS_PRODUCT]->(:Product)
+    RETURN
+        c.name AS customer,
+        c.segment AS segment,
+        c.city AS city,
+        c.province AS province,
+        count(DISTINCT o) AS delayed_orders,
+        avg(ship.days_real - ship.days_scheduled) AS avg_delay_days,
+        sum(coalesce(con.net_total, 0)) AS net_at_risk,
+        sum(coalesce(con.profit, 0)) AS profit_at_risk
+    ORDER BY profit_at_risk DESC, delayed_orders DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "customer_delay_exposure", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No customer delay exposure data found."
+    return _json(result)
+
+
+@tool
+def substitute_supplier_candidates(component_name: str, top_k: int = 10) -> str:
+    """
+    List suppliers that can provide a given component and compare quality/cost.
+    前端可用查询：输入组件名称，查看可供货供应商及其制造成本、次品率和覆盖面。
+    业务可用解读：用于替代供应商筛选和切换前评估。
+    """
+    component_name = (component_name or "").strip()
+    if not component_name:
+        return "Missing component name. Ask the user to specify the component."
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (s:Supplier)-[sup:SUPPLIES_COMPONENT]->(comp:Component)
+    WHERE comp.name CONTAINS $component_name
+    OPTIONAL MATCH (comp)-[:USED_IN]->(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)
+    RETURN
+        comp.name AS component,
+        s.name AS supplier,
+        s.city AS city,
+        avg(sup.mfg_cost) AS avg_mfg_cost,
+        avg(sup.defect_rate) AS avg_defect_rate,
+        count(DISTINCT p) AS covered_products,
+        count(DISTINCT o) AS covered_orders,
+        sum(coalesce(con.profit, 0)) AS profit_exposure
+    ORDER BY avg_defect_rate ASC, avg_mfg_cost ASC, covered_orders DESC
+    LIMIT $top_k
+    """
+    set_last_trace(
+        {"tool": "substitute_supplier_candidates", "type": "cypher", "cypher": cypher}
+    )
+    result = graph.query(
+        cypher, params={"component_name": component_name, "top_k": top_k}
+    )
+    if not result:
+        return f"No substitute supplier candidates found for component: {component_name}."
+    return _json(result)
+
+
+@tool
+def supplier_concentration_by_product(top_k: int = 10) -> str:
+    """
+    Highlight products with high supplier concentration risk.
+    前端可用查询：查看供应商数量少但利润暴露高的产品 TopN。
+    业务可用解读：用于识别高度依赖少数供应商的产品线。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (p:Product)
+    CALL {
+        WITH p
+        MATCH (s:Supplier)-[:SUPPLIES_COMPONENT]->(:Component)-[:USED_IN]->(p)
+        RETURN count(DISTINCT s) AS supplier_count
+    }
+    CALL {
+        WITH p
+        MATCH (p)<-[con:CONTAINS_PRODUCT]-(o:Order)
+        RETURN
+            count(DISTINCT o) AS orders,
+            sum(coalesce(con.net_total, 0)) AS net_revenue,
+            sum(coalesce(con.profit, 0)) AS profit
+    }
+    WITH p, supplier_count, orders, net_revenue, profit
+    WHERE orders > 0
+    RETURN
+        p.name AS product,
+        supplier_count,
+        orders,
+        net_revenue,
+        profit,
+        CASE
+            WHEN supplier_count = 0 THEN null
+            ELSE round(toFloat(orders) / supplier_count * 100) / 100
+        END AS orders_per_supplier
+    ORDER BY supplier_count ASC, profit DESC
+    LIMIT $top_k
+    """
+    set_last_trace(
+        {"tool": "supplier_concentration_by_product", "type": "cypher", "cypher": cypher}
+    )
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No supplier concentration data found for products."
+    return _json(result)
+
+
+@tool
+def component_quality_cost_tradeoff(top_k: int = 10) -> str:
+    """
+    Compare components and suppliers by defect-rate and manufacturing-cost tradeoff.
+    前端可用查询：查看高制造成本且高次品率的组件/供应商组合 TopN。
+    业务可用解读：用于定位质量与成本同时偏高的高风险组合。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (s:Supplier)-[sup:SUPPLIES_COMPONENT]->(comp:Component)
+    CALL {
+        WITH comp
+        MATCH (comp)-[:USED_IN]->(p:Product)<-[con:CONTAINS_PRODUCT]-(o:Order)
+        RETURN
+            count(DISTINCT o) AS orders,
+            sum(coalesce(con.profit, 0)) AS profit_exposure
+    }
+    RETURN
+        s.name AS supplier,
+        comp.name AS component,
+        avg(sup.mfg_cost) AS avg_mfg_cost,
+        avg(sup.defect_rate) AS avg_defect_rate,
+        orders,
+        profit_exposure
+    ORDER BY avg_defect_rate DESC, avg_mfg_cost DESC, profit_exposure DESC
+    LIMIT $top_k
+    """
+    set_last_trace(
+        {"tool": "component_quality_cost_tradeoff", "type": "cypher", "cypher": cypher}
+    )
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No component quality-cost tradeoff data found."
+    return _json(result)
+
+
+@tool
+def route_delay_risk(top_k: int = 10) -> str:
+    """
+    Analyze delay exposure by region and logistics route choice.
+    前端可用查询：查看区域、承运商、运输方式维度的延迟风险暴露 TopN。
+    业务可用解读：用于优化区域物流路径和承运商组合。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (c:Customer)-[:PLACED_ORDER]->(o:Order)-[ship:SHIPPED_BY]->(car:Carrier)
+    WHERE coalesce(ship.late_risk, 0) = 1
+    OPTIONAL MATCH (o)-[con:CONTAINS_PRODUCT]->(:Product)
+    RETURN
+        c.province AS province,
+        c.city AS city,
+        car.name AS carrier,
+        ship.trans_mode AS transport_mode,
+        ship.ship_mode AS ship_mode,
+        count(DISTINCT o) AS delayed_orders,
+        avg(ship.days_real - ship.days_scheduled) AS avg_delay_days,
+        sum(coalesce(con.net_total, 0)) AS net_at_risk,
+        sum(coalesce(con.profit, 0)) AS profit_at_risk
+    ORDER BY profit_at_risk DESC, delayed_orders DESC
+    LIMIT $top_k
+    """
+    set_last_trace({"tool": "route_delay_risk", "type": "cypher", "cypher": cypher})
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No route delay risk data found."
+    return _json(result)
+
+
+@tool
+def profit_at_risk_by_order_stage(top_k: int = 10) -> str:
+    """
+    Compare delayed-profit exposure across order statuses.
+    前端可用查询：查看不同订单状态下的利润暴露和延迟风险 TopN。
+    业务可用解读：用于识别最值得优先盯防的订单阶段。
+    """
+    top_k = _coerce_top_k(top_k, default=10, maximum=50)
+
+    cypher = """
+    MATCH (o:Order)-[con:CONTAINS_PRODUCT]->(:Product)
+    OPTIONAL MATCH (o)-[ship:SHIPPED_BY]->(:Carrier)
+    RETURN
+        o.status AS order_status,
+        count(DISTINCT o) AS orders,
+        sum(coalesce(con.net_total, 0)) AS net_revenue,
+        sum(coalesce(con.profit, 0)) AS profit,
+        count(DISTINCT CASE WHEN coalesce(ship.late_risk, 0) = 1 THEN o END) AS late_orders,
+        sum(CASE WHEN coalesce(ship.late_risk, 0) = 1 THEN coalesce(con.net_total, 0) ELSE 0 END) AS delayed_net_at_risk,
+        sum(CASE WHEN coalesce(ship.late_risk, 0) = 1 THEN coalesce(con.profit, 0) ELSE 0 END) AS delayed_profit_at_risk
+    ORDER BY delayed_profit_at_risk DESC, late_orders DESC
+    LIMIT $top_k
+    """
+    set_last_trace(
+        {"tool": "profit_at_risk_by_order_stage", "type": "cypher", "cypher": cypher}
+    )
+    result = graph.query(cypher, params={"top_k": top_k})
+    if not result:
+        return "No order-stage profit-at-risk data found."
     return _json(result)
