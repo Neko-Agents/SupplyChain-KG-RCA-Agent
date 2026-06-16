@@ -3,6 +3,12 @@
 __pycache__/
 *.pyc
 uploads/
+onyx-main/
+trustgraph-master/
+__pycache__/
+*.egg-info/
+dist/
+build/
 
 # OS / editor
 .DS_Store
@@ -15,3 +21,6 @@ Thumbs.db
 
 # Optional large local artifacts
 *.7z
+
+# Local generated / downloaded data that should stay out of a clean public repo
+数据/爬取文档/

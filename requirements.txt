@@ -1,0 +1,12 @@
+fastapi>=0.110,<1.0
+uvicorn>=0.29,<1.0
+pydantic>=2.6,<3.0
+python-multipart>=0.0.9,<1.0
+neo4j>=5.20,<6.0
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+langchain-core>=0.2,<0.4
+langchain-openai>=0.1.0,<0.4
+langgraph>=0.2,<0.4
+langchain-neo4j>=0.1.0,<0.3
+pypdf>=4.2,<6.0
